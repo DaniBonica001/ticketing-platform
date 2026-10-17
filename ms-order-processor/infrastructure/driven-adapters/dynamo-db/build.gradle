@@ -1,0 +1,8 @@
+dependencies {
+    implementation project(':aws-errors')
+    implementation project(':metrics')
+    implementation 'software.amazon.awssdk:dynamodb'
+    implementation 'software.amazon.awssdk:metrics-spi'
+    implementation 'io.micrometer:micrometer-core'
+    implementation 'org.slf4j:slf4j-api'
+}

@@ -1,0 +1,4 @@
+dependencies {
+    implementation 'io.micrometer:micrometer-core'
+    implementation 'software.amazon.awssdk:metrics-spi'
+}

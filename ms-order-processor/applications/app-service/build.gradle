@@ -1,0 +1,13 @@
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-opentelemetry'
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+    implementation "com.github.bancolombia:aws-secrets-manager-async:${rootProject.ext.secretsManagerVersion}"
+    implementation 'software.amazon.awssdk:dynamodb'
+    implementation 'software.amazon.awssdk:sts'
+    implementation 'tools.jackson.core:jackson-databind'
+
+    testImplementation 'org.testcontainers:testcontainers-localstack'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+}

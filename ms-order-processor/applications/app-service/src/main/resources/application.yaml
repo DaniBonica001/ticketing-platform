@@ -1,0 +1,104 @@
+# ms-order-processor: SQS consumer. No public HTTP API: the only HTTP server is the actuator on port 9090.
+# Configuration comes only from the environment variables of docs/design/conventions.md.
+server:
+  port: 9090
+  shutdown: graceful
+spring:
+  application:
+    name: "${OTEL_SERVICE_NAME:ms-order-processor}"
+  main:
+    banner-mode: "off"
+  reactor:
+    context-propagation: auto
+  lifecycle:
+    timeout-per-shutdown-phase: "25s"
+
+aws:
+  region: "${AWS_REGION:us-east-1}"
+  # Optional, local only (LocalStack). Empty in AWS.
+  endpoint: "${AWS_ENDPOINT_URL:}"
+
+adapters:
+  dynamodb:
+    tables:
+      events: "${EVENTS_TABLE:ticketing-events}"
+      orders: "${ORDERS_TABLE:ticketing-orders}"
+      audit: "${AUDIT_TABLE:ticketing-order-audit}"
+  payment-gateway:
+    secret-id: "${PAYMENT_GATEWAY_SECRET_ID:ticketing/payment-gateway}"
+    secret-cache-ttl: "PT1H"
+    timeout: "PT2S"
+    retry:
+      max-attempts: 3
+      wait-duration: "PT0.2S"
+    circuit-breaker:
+      failure-rate-threshold: 50
+      sliding-window-size: 10
+      minimum-number-of-calls: 5
+      wait-duration-in-open-state: "PT30S"
+
+entrypoint:
+  sqs:
+    region: "${AWS_REGION:us-east-1}"
+    endpoint: "${AWS_ENDPOINT_URL:}"
+    orders-queue-url: "${ORDERS_QUEUE_URL}"
+    confirmations-queue-url: "${CONFIRMATIONS_QUEUE_URL}"
+    wait-time-seconds: 20
+    max-number-of-messages: 10
+    # 0 = keep the queue's VisibilityTimeout (30 s, ADR-0003)
+    visibility-timeout-seconds: 0
+    number-of-threads: 1
+    concurrency: 10
+
+ticketing:
+  reservation:
+    ttl: "PT10M"
+  retry:
+    max-retries: 3
+    min-backoff: "PT0.1S"
+    max-backoff: "PT2S"
+    jitter: 0.5
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health,info,prometheus"
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  tracing:
+    sampling:
+      probability: 1.0
+  opentelemetry:
+    resource-attributes:
+      service.name: "${OTEL_SERVICE_NAME:ms-order-processor}"
+    tracing:
+      export:
+        otlp:
+          endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces"
+    logging:
+      export:
+        otlp:
+          endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs"
+  otlp:
+    metrics:
+      export:
+        url: "${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics"
+        step: "30s"
+  observations:
+    key-values:
+      service: "${OTEL_SERVICE_NAME:ms-order-processor}"
+
+logging:
+  structured:
+    format:
+      console: ecs
+    ecs:
+      service:
+        name: "${OTEL_SERVICE_NAME:ms-order-processor}"
+  level:
+    root: INFO
+    software.amazon.awssdk: WARN

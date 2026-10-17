@@ -1,0 +1,10 @@
+dependencies {
+    implementation project(':aws-errors')
+    implementation "com.github.bancolombia:secrets-manager-api:${rootProject.ext.secretsManagerVersion}"
+    implementation "io.github.resilience4j:resilience4j-circuitbreaker:${rootProject.ext.resilience4jVersion}"
+    implementation "io.github.resilience4j:resilience4j-retry:${rootProject.ext.resilience4jVersion}"
+    implementation "io.github.resilience4j:resilience4j-timelimiter:${rootProject.ext.resilience4jVersion}"
+    implementation "io.github.resilience4j:resilience4j-reactor:${rootProject.ext.resilience4jVersion}"
+    implementation 'tools.jackson.core:jackson-databind'
+    implementation 'org.slf4j:slf4j-api'
+}

@@ -1,0 +1,13 @@
+dependencies {
+    implementation project(':metrics')
+    implementation 'org.springframework.boot:spring-boot-starter'
+    implementation 'software.amazon.awssdk:sqs'
+    implementation 'software.amazon.awssdk:metrics-spi'
+    implementation 'tools.jackson.core:jackson-databind'
+    implementation 'io.micrometer:micrometer-core'
+    implementation 'io.micrometer:micrometer-observation'
+    implementation 'io.micrometer:micrometer-tracing'
+
+    testImplementation 'io.micrometer:micrometer-tracing-bridge-otel'
+    testImplementation 'io.opentelemetry:opentelemetry-sdk'
+}
