@@ -1,0 +1,9 @@
+dependencies {
+    implementation project(':model')
+    implementation project(':resilience')
+    implementation 'org.springframework.boot:spring-boot-autoconfigure'
+    implementation 'software.amazon.awssdk:dynamodb'
+    implementation 'io.micrometer:micrometer-core'
+    implementation 'io.opentelemetry:opentelemetry-api'
+    implementation 'org.slf4j:slf4j-api'
+}

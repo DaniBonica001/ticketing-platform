@@ -1,0 +1,5 @@
+dependencies {
+    implementation 'software.amazon.awssdk:sts'
+    implementation 'org.springframework.boot:spring-boot-starter-opentelemetry'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+}
