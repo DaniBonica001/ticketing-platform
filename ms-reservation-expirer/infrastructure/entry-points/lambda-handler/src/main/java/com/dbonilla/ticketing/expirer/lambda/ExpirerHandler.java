@@ -60,7 +60,17 @@ public class ExpirerHandler implements RequestHandler<Map<String, Object>, Expir
         ExpirationSummary summary = ExpirationSummary.of(results.getT1(), results.getT2());
         long durationMillis = Duration.between(startedAt, components.clock().instant()).toMillis();
         InvocationLog.summary(requestId, execution.traceId(), summary, durationMillis);
+        publishMetrics(requestId, summary);
         return summary;
+    }
+
+    /** Telemetry never fails the invocation (the publisher already guards itself; this is the last line). */
+    private void publishMetrics(String requestId, ExpirationSummary summary) {
+        try {
+            components.metrics().publish(summary.toRunMetrics());
+        } catch (RuntimeException error) {
+            InvocationLog.metricsFailure(requestId, error);
+        }
     }
 
     /** Lazy holder: initialised on first use, reused by every warm invocation. */

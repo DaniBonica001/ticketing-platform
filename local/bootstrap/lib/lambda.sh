@@ -2,6 +2,8 @@
 # Reservation expirer Lambda, its IAM role and the EventBridge schedule (ADR-0005). Sourced by bootstrap.sh.
 
 readonly FUNCTION_NAME="ticketing-reservation-expirer"
+# OpenTelemetry service name of the Lambda (conventions.md: component folder name).
+readonly EXPIRER_SERVICE_NAME="ms-reservation-expirer"
 readonly ROLE_NAME="ticketing-reservation-expirer"
 readonly ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
 readonly RULE_NAME="ticketing-reservation-expirer-schedule"
@@ -91,7 +93,7 @@ lambda_environment() {
   "CONFIRMATIONS_QUEUE_URL":"${CONFIRMATIONS_QUEUE_URL}",
   "AWS_ENDPOINT_URL":"${AWS_ENDPOINT_URL}",
   "OTEL_EXPORTER_OTLP_ENDPOINT":"${OTEL_EXPORTER_OTLP_ENDPOINT}",
-  "OTEL_SERVICE_NAME":"${FUNCTION_NAME}"
+  "OTEL_SERVICE_NAME":"${EXPIRER_SERVICE_NAME}"
 }}
 JSON
 }

@@ -6,7 +6,10 @@ import com.dbonilla.ticketing.expirer.helpers.retry.TransientRetry;
 import com.dbonilla.ticketing.expirer.lambda.ExpirerComponents;
 import com.dbonilla.ticketing.expirer.lambda.ExpirerComponentsProvider;
 import com.dbonilla.ticketing.expirer.model.message.gateways.OrderMessagePublisher;
+import com.dbonilla.ticketing.expirer.model.metrics.gateways.RunMetricsPublisher;
 import com.dbonilla.ticketing.expirer.model.order.gateways.OrderRepository;
+import com.dbonilla.ticketing.expirer.otel.OtelTelemetry;
+import com.dbonilla.ticketing.expirer.otel.TelemetrySettings;
 import com.dbonilla.ticketing.expirer.sqs.sender.SqsOrderMessagePublisher;
 import com.dbonilla.ticketing.expirer.usecase.expirereservations.ExpireReservationsUseCase;
 import com.dbonilla.ticketing.expirer.usecase.reconcilestuckorders.ReconcileStuckOrdersUseCase;
@@ -34,12 +37,15 @@ public class LambdaComponentsProvider implements ExpirerComponentsProvider {
 
     ExpirerComponents create(Map<String, String> environment) {
         ExpirerSettings settings = ExpirerSettings.fromEnvironment(environment);
+        TelemetrySettings telemetry = TelemetrySettings.fromEnvironment(environment);
         AwsClientFactory clients = new AwsClientFactory(settings);
-        return wire(settings, clients.dynamoDb(), clients.sqs(), Clock.systemUTC(), RetrySettings.DEFAULT);
+        LOG.info("Telemetry configured: enabled={} serviceName={}", telemetry.isEnabled(), telemetry.serviceName());
+        return wire(settings, clients.dynamoDb(), clients.sqs(), Clock.systemUTC(), RetrySettings.DEFAULT,
+                OtelTelemetry.metricsPublisher(telemetry));
     }
 
     static ExpirerComponents wire(ExpirerSettings settings, DynamoDbAsyncClient dynamoDb, SqsAsyncClient sqs,
-                                  Clock clock, RetrySettings retrySettings) {
+                                  Clock clock, RetrySettings retrySettings, RunMetricsPublisher metrics) {
         Retry retry = TransientRetry.backoff(retrySettings);
         OrderRepository repository = new DynamoDbOrderRepository(dynamoDb, settings.tables(), retry);
         OrderMessagePublisher publisher = new SqsOrderMessagePublisher(sqs, settings.queues(), retry);
@@ -52,6 +58,6 @@ public class LambdaComponentsProvider implements ExpirerComponentsProvider {
                 new ExpireReservationsUseCase(repository, settings.scan()),
                 new ReconcileStuckOrdersUseCase(repository, publisher, settings.scan(),
                         settings.reconciliationDeadline()),
-                clock);
+                clock, metrics);
     }
 }

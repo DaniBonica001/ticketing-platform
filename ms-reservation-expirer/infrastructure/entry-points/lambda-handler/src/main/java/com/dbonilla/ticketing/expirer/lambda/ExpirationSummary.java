@@ -1,5 +1,6 @@
 package com.dbonilla.ticketing.expirer.lambda;
 
+import com.dbonilla.ticketing.expirer.model.metrics.RunMetrics;
 import com.dbonilla.ticketing.expirer.usecase.expirereservations.ExpirationResult;
 import com.dbonilla.ticketing.expirer.usecase.reconcilestuckorders.ReconciliationResult;
 
@@ -13,5 +14,9 @@ public record ExpirationSummary(int expired, int skipped, int republishedQueued,
         return new ExpirationSummary(expiration.expired(), expiration.skipped(),
                 reconciliation.republishedQueued(), reconciliation.republishedPendingConfirmation(),
                 expiration.failures().size() + reconciliation.failures().size());
+    }
+
+    RunMetrics toRunMetrics() {
+        return new RunMetrics(expired, republishedQueued, republishedPendingConfirmation, failures);
     }
 }

@@ -60,10 +60,14 @@ public class RateLimitFilter implements WebFilter {
                     .defaultIfEmpty(clientIp(request))
                     .flatMap(user -> apply(ordersLimiter, "user:" + user, exchange, chain));
         }
-        if (HttpMethod.GET.equals(request.getMethod()) && path.startsWith(PUBLIC_PREFIX)) {
+        if (isReadMethod(request.getMethod()) && path.startsWith(PUBLIC_PREFIX)) {
             return apply(publicLimiter, "ip:" + clientIp(request), exchange, chain);
         }
         return chain.filter(exchange);
+    }
+
+    private static boolean isReadMethod(HttpMethod method) {
+        return HttpMethod.GET.equals(method) || HttpMethod.HEAD.equals(method);
     }
 
     private Mono<Void> apply(RateLimiter limiter, String key, ServerWebExchange exchange, WebFilterChain chain) {

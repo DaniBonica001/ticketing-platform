@@ -3,6 +3,7 @@ package com.dbonilla.ticketing.expirer.bootstrap;
 import com.dbonilla.ticketing.expirer.helpers.retry.RetrySettings;
 import com.dbonilla.ticketing.expirer.lambda.ExpirerComponents;
 import com.dbonilla.ticketing.expirer.lambda.ExpirerComponentsProvider;
+import com.dbonilla.ticketing.expirer.model.metrics.gateways.RunMetricsPublisher;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 import software.amazon.awssdk.services.sqs.SqsAsyncClient;
@@ -23,11 +24,12 @@ class LambdaComponentsProviderTest {
         Clock clock = Clock.systemUTC();
 
         ExpirerComponents components = LambdaComponentsProvider.wire(settings, mock(DynamoDbAsyncClient.class),
-                mock(SqsAsyncClient.class), clock, RetrySettings.DEFAULT);
+                mock(SqsAsyncClient.class), clock, RetrySettings.DEFAULT, RunMetricsPublisher.NOOP);
 
         assertThat(components.expireReservations()).isNotNull();
         assertThat(components.reconcileStuckOrders()).isNotNull();
         assertThat(components.clock()).isSameAs(clock);
+        assertThat(components.metrics()).isSameAs(RunMetricsPublisher.NOOP);
     }
 
     @Test
@@ -38,6 +40,17 @@ class LambdaComponentsProviderTest {
         ExpirerComponents components = new LambdaComponentsProvider().create(env);
 
         assertThat(components.expireReservations()).isNotNull();
+        assertThat(components.metrics()).isSameAs(RunMetricsPublisher.NOOP);
+    }
+
+    @Test
+    void enablesTelemetryWhenTheOtlpEndpointIsSet() {
+        Map<String, String> env = new HashMap<>(ExpirerSettingsTest.requiredEnvironment());
+        env.put("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318");
+
+        ExpirerComponents components = new LambdaComponentsProvider().create(env);
+
+        assertThat(components.metrics()).isNotSameAs(RunMetricsPublisher.NOOP);
     }
 
     @Test

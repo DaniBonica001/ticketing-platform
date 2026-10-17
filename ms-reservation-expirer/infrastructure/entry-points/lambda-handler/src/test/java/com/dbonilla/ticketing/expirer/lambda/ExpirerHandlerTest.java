@@ -3,6 +3,8 @@ package com.dbonilla.ticketing.expirer.lambda;
 import com.amazonaws.services.lambda.runtime.Context;
 import com.dbonilla.ticketing.expirer.model.execution.ExecutionContext;
 import com.dbonilla.ticketing.expirer.model.execution.OrderFailure;
+import com.dbonilla.ticketing.expirer.model.metrics.RunMetrics;
+import com.dbonilla.ticketing.expirer.model.metrics.gateways.RunMetricsPublisher;
 import com.dbonilla.ticketing.expirer.model.order.OrderStatus;
 import com.dbonilla.ticketing.expirer.usecase.expirereservations.ExpirationResult;
 import com.dbonilla.ticketing.expirer.usecase.expirereservations.ExpireReservationsUseCase;
@@ -21,6 +23,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -34,8 +37,9 @@ class ExpirerHandlerTest {
     private final ExpireReservationsUseCase expire = mock(ExpireReservationsUseCase.class);
     private final ReconcileStuckOrdersUseCase reconcile = mock(ReconcileStuckOrdersUseCase.class);
     private final Context context = mock(Context.class);
+    private final RunMetricsPublisher metrics = mock(RunMetricsPublisher.class);
     private final ExpirerHandler handler = new ExpirerHandler(
-            new ExpirerComponents(expire, reconcile, Clock.fixed(NOW, ZoneOffset.UTC)));
+            new ExpirerComponents(expire, reconcile, Clock.fixed(NOW, ZoneOffset.UTC), metrics));
 
     @Test
     void returnsTheSummaryOfBothUseCases() {
@@ -46,6 +50,18 @@ class ExpirerHandlerTest {
         ExpirationSummary summary = handler.handleRequest(SCHEDULED_EVENT, context);
 
         assertThat(summary).isEqualTo(new ExpirationSummary(3, 1, 2, 1, 0));
+        verify(metrics).publish(new RunMetrics(3, 2, 1, 0));
+    }
+
+    @Test
+    void metricsFailuresDoNotFailTheInvocation() {
+        when(expire.execute(any())).thenReturn(Mono.just(new ExpirationResult(1, 0, List.of())));
+        when(reconcile.execute(any())).thenReturn(Mono.just(ReconciliationResult.EMPTY));
+        doThrow(new IllegalStateException("collector down")).when(metrics).publish(any());
+
+        ExpirationSummary summary = handler.handleRequest(SCHEDULED_EVENT, context);
+
+        assertThat(summary.expired()).isEqualTo(1);
     }
 
     @Test
@@ -60,6 +76,7 @@ class ExpirerHandlerTest {
 
         assertThat(summary.expired()).isEqualTo(1);
         assertThat(summary.failures()).isEqualTo(2);
+        verify(metrics).publish(new RunMetrics(1, 0, 0, 2));
     }
 
     @Test
@@ -103,9 +120,14 @@ class ExpirerHandlerTest {
     @Test
     void componentsAreRequired() {
         Clock clock = Clock.systemUTC();
-        assertThatThrownBy(() -> new ExpirerComponents(null, reconcile, clock)).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new ExpirerComponents(expire, null, clock)).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new ExpirerComponents(expire, reconcile, null)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new ExpirerComponents(null, reconcile, clock, metrics))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new ExpirerComponents(expire, null, clock, metrics))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new ExpirerComponents(expire, reconcile, null, metrics))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new ExpirerComponents(expire, reconcile, clock, null))
+                .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new ExpirerHandler(null)).isInstanceOf(NullPointerException.class);
     }
 }

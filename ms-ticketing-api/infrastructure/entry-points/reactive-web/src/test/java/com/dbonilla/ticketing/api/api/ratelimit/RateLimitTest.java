@@ -122,6 +122,23 @@ class RateLimitTest {
     }
 
     @Test
+    void headRequestsShareThePublicLimitWithGet() {
+        RateLimitFilter filter = filter();
+        AtomicInteger passed = new AtomicInteger();
+        MockServerHttpRequest get = MockServerHttpRequest.get("/api/v1/events")
+                .remoteAddress(new InetSocketAddress("10.0.0.2", 1234)).build();
+        MockServerHttpRequest head = MockServerHttpRequest.head("/api/v1/events/x")
+                .remoteAddress(new InetSocketAddress("10.0.0.2", 1234)).build();
+
+        StepVerifier.create(filter.filter(MockServerWebExchange.from(get), counting(passed))).verifyComplete();
+        MockServerWebExchange limited = MockServerWebExchange.from(head);
+        StepVerifier.create(filter.filter(limited, counting(passed))).verifyComplete();
+
+        assertThat(limited.getResponse().getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(passed).hasValue(1);
+    }
+
+    @Test
     void otherEndpointsAreNotLimited() {
         RateLimitFilter filter = filter();
         AtomicInteger passed = new AtomicInteger();
