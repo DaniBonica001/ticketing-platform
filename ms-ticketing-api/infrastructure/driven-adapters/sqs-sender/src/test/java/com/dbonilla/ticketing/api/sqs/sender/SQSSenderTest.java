@@ -5,11 +5,19 @@ import com.dbonilla.ticketing.api.model.order.OrderStatus;
 import com.dbonilla.ticketing.api.resilience.RetryProperties;
 import com.dbonilla.ticketing.api.resilience.TransientRetry;
 import com.dbonilla.ticketing.api.sqs.sender.config.SQSSenderProperties;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.TraceFlags;
 import io.opentelemetry.api.trace.TraceState;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
+import io.opentelemetry.sdk.trace.data.SpanData;
+import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,6 +37,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,19 +59,30 @@ class SQSSenderTest {
     private SqsAsyncClient client;
 
     private final JsonMapper jsonMapper = JsonMapper.builder().build();
+    private final InMemorySpanExporter spans = InMemorySpanExporter.create();
     private SQSSender sender;
 
     @BeforeEach
     void setUp() {
+        OpenTelemetrySdk openTelemetry = OpenTelemetrySdk.builder()
+                .setTracerProvider(SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(spans)).build())
+                .build();
         SQSSenderProperties properties = new SQSSenderProperties("us-east-1", null, ORDERS_URL, CONFIRMATIONS_URL);
         TransientRetry retry = new TransientRetry(new RetryProperties(3, Duration.ofMillis(1), Duration.ofMillis(2), 0.5));
-        sender = new SQSSender(client, properties, retry, jsonMapper, Clock.fixed(NOW, ZoneOffset.UTC));
+        sender = new SQSSender(client, properties, retry, jsonMapper, Clock.fixed(NOW, ZoneOffset.UTC),
+                openTelemetry);
     }
 
     private SendMessageRequest sentRequest() {
         ArgumentCaptor<SendMessageRequest> request = ArgumentCaptor.forClass(SendMessageRequest.class);
         verify(client).sendMessage(request.capture());
         return request.getValue();
+    }
+
+    private SpanData onlySpan() {
+        List<SpanData> finished = spans.getFinishedSpanItems();
+        assertThat(finished).hasSize(1);
+        return finished.getFirst();
     }
 
     private void sendSucceeds() {
@@ -88,7 +108,16 @@ class SQSSenderTest {
         assertThat(body.get("payload").get("eventId").asString()).isEqualTo(ORDER.eventId());
         assertThat(body.properties()).hasSize(6);
         assertThat(request.messageAttributes().get("messageType").stringValue()).isEqualTo("OrderPlaced");
-        assertThat(request.messageAttributes()).doesNotContainKey("traceparent");
+        SpanData span = onlySpan();
+        assertThat(span.getName()).isEqualTo("ticketing-orders-queue publish");
+        assertThat(span.getKind()).isEqualTo(SpanKind.PRODUCER);
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.system"))).isEqualTo("aws_sqs");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.destination.name")))
+                .isEqualTo("ticketing-orders-queue");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.operation"))).isEqualTo("publish");
+        assertThat(span.getAttributes().get(AttributeKey.stringKey("messaging.message.id"))).isEqualTo("m1");
+        assertThat(request.messageAttributes().get("traceparent").stringValue())
+                .isEqualTo("00-" + span.getTraceId() + "-" + span.getSpanId() + "-" + span.getSpanContext().getTraceFlags().asHex());
     }
 
     @Test
@@ -104,8 +133,12 @@ class SQSSenderTest {
         SendMessageRequest request = sentRequest();
         assertThat(request.queueUrl()).isEqualTo(CONFIRMATIONS_URL);
         assertThat(request.messageAttributes().get("messageType").stringValue()).isEqualTo("OrderConfirmationRequested");
+        SpanData span = onlySpan();
+        assertThat(span.getName()).isEqualTo("ticketing-confirmations-queue publish");
+        assertThat(span.getTraceId()).isEqualTo("4bf92f3577b34da6a3ce929d0e0e4736");
+        assertThat(span.getParentSpanId()).isEqualTo("00f067aa0ba902b7");
         assertThat(request.messageAttributes().get("traceparent").stringValue())
-                .isEqualTo("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01");
+                .isEqualTo("00-4bf92f3577b34da6a3ce929d0e0e4736-" + span.getSpanId() + "-01");
     }
 
     @Test
@@ -115,6 +148,28 @@ class SQSSenderTest {
 
         StepVerifier.create(sender.publishOrderPlaced(ORDER)).verifyError(SdkClientException.class);
         verify(client, times(4)).sendMessage(any(SendMessageRequest.class));
+        SpanData span = onlySpan();
+        assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+        assertThat(span.getEvents()).extracting(event -> event.getName()).contains("exception");
+    }
+
+    @Test
+    void endsTheSpanWithErrorWhenTheMessageCannotBeBuilt() {
+        SQSSender failing = new SQSSender(client,
+                new SQSSenderProperties("us-east-1", null, ORDERS_URL, CONFIRMATIONS_URL),
+                new TransientRetry(new RetryProperties(3, Duration.ofMillis(1), Duration.ofMillis(2), 0.5)),
+                jsonMapper, null, OpenTelemetrySdk.builder().setTracerProvider(
+                        SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(spans)).build()).build());
+
+        StepVerifier.create(failing.publishOrderPlaced(ORDER)).verifyError(NullPointerException.class);
+
+        assertThat(onlySpan().getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
+    }
+
+    @Test
+    void derivesTheQueueNameFromTheUrl() {
+        assertThat(SQSSender.queueName(ORDERS_URL + "/")).isEqualTo("ticketing-orders-queue");
+        assertThat(SQSSender.queueName("ticketing-orders-queue")).isEqualTo("ticketing-orders-queue");
     }
 
     @Test

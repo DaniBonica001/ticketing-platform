@@ -1,0 +1,11 @@
+dependencies {
+    implementation project(':model')
+    // AWS-free OpenTelemetry BOM (same line Spring Boot manages in the other components).
+    implementation platform('io.opentelemetry:opentelemetry-bom:1.62.0')
+    implementation 'io.opentelemetry:opentelemetry-sdk-metrics'
+    implementation 'io.opentelemetry:opentelemetry-exporter-otlp'
+    // java.net.http sender instead of OkHttp (+ Kotlin stdlib): keeps the Lambda zip small.
+    implementation 'io.opentelemetry:opentelemetry-exporter-sender-jdk'
+    implementation 'org.apache.logging.log4j:log4j-api'
+    testImplementation 'io.opentelemetry:opentelemetry-sdk-testing'
+}

@@ -38,6 +38,8 @@ subprojects {
         exclude group: 'software.amazon.awssdk', module: 'apache5-client'
         // Added by the scaffold conventions but not used by this component.
         exclude group: 'io.projectreactor.addons', module: 'reactor-extra'
+        // OTLP export uses the java.net.http sender; OkHttp (+ Kotlin stdlib) would add ~2.7 MB to the zip.
+        exclude group: 'io.opentelemetry', module: 'opentelemetry-exporter-sender-okhttp'
     }
     // Tests route logging through log4j2 (same as production), not through Spring's logback.
     configurations.matching { it.name in ['testCompileClasspath', 'testRuntimeClasspath'] }.configureEach {

@@ -785,8 +785,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (service_name, span_name) (rate(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_PRODUCER\"}[$__rate_interval]))",
-          "legendFormat": "{{service_name}} {{span_name}}",
+          "expr": "sum by (service, span_name) (rate(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_PRODUCER\"}[$__rate_interval]))",
+          "legendFormat": "{{service}} {{span_name}}",
           "refId": "A"
         }
       ]
@@ -838,7 +838,7 @@
             "uid": "prometheus"
           },
           "expr": "sum by (service_name, span_name) (rate(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_CONSUMER\"}[$__rate_interval]))",
-          "legendFormat": "{{service_name}} {{span_name}}",
+          "legendFormat": "{{service}} {{span_name}}",
           "refId": "A"
         },
         {

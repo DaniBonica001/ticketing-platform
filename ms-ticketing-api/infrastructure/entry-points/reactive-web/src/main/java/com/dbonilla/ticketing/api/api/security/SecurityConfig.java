@@ -28,6 +28,9 @@ import static com.dbonilla.ticketing.api.api.support.CallerResolver.USER_AUTHORI
 @EnableConfigurationProperties(JwtProperties.class)
 public class SecurityConfig {
 
+    private static final String[] PUBLIC_EVENT_PATHS = {"/api/v1/events", "/api/v1/events/*",
+            "/api/v1/events/*/availability", "/api/v1/events/*/availability/stream"};
+
     @Bean
     public ReactiveJwtDecoder jwtDecoder(JwtProperties properties) {
         return JwtDecoderFactory.create(properties);
@@ -63,8 +66,8 @@ public class SecurityConfig {
         exchanges
                 .pathMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**", "/actuator/info",
                         "/actuator/prometheus").permitAll()
-                .pathMatchers(HttpMethod.GET, "/api/v1/events", "/api/v1/events/*",
-                        "/api/v1/events/*/availability", "/api/v1/events/*/availability/stream").permitAll()
+                .pathMatchers(HttpMethod.GET, PUBLIC_EVENT_PATHS).permitAll()
+                .pathMatchers(HttpMethod.HEAD, "/api/v1/events/*").permitAll()
                 .pathMatchers(HttpMethod.POST, "/api/v1/events", "/api/v1/events/*/complimentary")
                 .hasAuthority(ADMIN_AUTHORITY)
                 .pathMatchers(HttpMethod.PUT, "/api/v1/events/*").hasAuthority(ADMIN_AUTHORITY)

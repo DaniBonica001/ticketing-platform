@@ -14,7 +14,7 @@ TOKEN_SUB_USER ?= user-1
 TOKEN_SUB_ADMIN ?= admin-1
 TOKEN_TTL ?= 900
 
-.PHONY: help keys up down logs ps token-user token-admin bootstrap smoke config clean-lambdas
+.PHONY: help keys up down logs ps token-user token-admin bootstrap smoke demo load-test postman config clean-lambdas
 
 help: ## Show available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -52,6 +52,19 @@ bootstrap: ## Re-run the idempotent AWS bootstrap against the running LocalStack
 
 smoke: ## Health checks plus a listing of the AWS resources in LocalStack (127.0.0.1:4766)
 	@scripts/smoke.sh
+
+demo: ## Run the end-to-end purchase flows against the running stack (asserts every step)
+	@scripts/demo-flow.sh
+
+load-test: ## Concurrent purchase burst against the running stack; proves zero overselling
+	@scripts/load-test.py
+
+postman: ## Run the Postman collection with Newman (needs Node.js) using fresh dev tokens
+	@npx -y newman@6.2.1 run postman/ticketing-api.postman_collection.json \
+		-e postman/local.postman_environment.json \
+		--env-var "userToken=$$(scripts/issue-token.sh postman-user user)" \
+		--env-var "adminToken=$$(scripts/issue-token.sh postman-admin admin)" \
+		--delay-request 1200 --timeout-request 15000
 
 config: ## Validate docker-compose.yml
 	$(COMPOSE) config -q && echo "docker-compose.yml is valid"

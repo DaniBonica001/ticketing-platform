@@ -132,6 +132,15 @@ class EventRoutesTest extends WebTestBase {
     }
 
     @Test
+    void headOnPublicEventIsAllowedAndExposesEtag() {
+        when(manageEvents.get(EVENT_ID)).thenReturn(Mono.just(event()));
+
+        client.head().uri("/api/v1/events/" + EVENT_ID).exchange()
+                .expectStatus().isOk()
+                .expectHeader().valueEquals("ETag", "\"3\"");
+    }
+
+    @Test
     void getUnknownEventIsNotFound() {
         when(manageEvents.get(EVENT_ID)).thenReturn(Mono.error(new EventNotFoundException(EVENT_ID)));
 

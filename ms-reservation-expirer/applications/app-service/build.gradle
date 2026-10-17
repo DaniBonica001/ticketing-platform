@@ -5,6 +5,7 @@ dependencies {
     implementation project(':sqs-sender')
     implementation project(':retry')
     implementation project(':lambda-handler')
+    implementation project(':otel-metrics')
     implementation 'software.amazon.awssdk:dynamodb'
     implementation 'software.amazon.awssdk:sqs'
     implementation 'software.amazon.awssdk:netty-nio-client'

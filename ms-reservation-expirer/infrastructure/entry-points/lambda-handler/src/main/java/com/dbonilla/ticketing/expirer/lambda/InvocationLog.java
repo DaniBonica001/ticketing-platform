@@ -48,6 +48,13 @@ final class InvocationLog {
         }
     }
 
+    static void metricsFailure(String requestId, RuntimeException error) {
+        try (var ignored = CloseableThreadContext.put("awsRequestId", requestId)
+                .put("errorType", error.getClass().getName())) {
+            LOG.warn("Could not publish the run metrics");
+        }
+    }
+
     private static void putIfPresent(Map<String, String> fields, String key, String value) {
         if (value != null) {
             fields.put(key, value);

@@ -1,5 +1,6 @@
 package com.dbonilla.ticketing.expirer.lambda;
 
+import com.dbonilla.ticketing.expirer.model.metrics.gateways.RunMetricsPublisher;
 import com.dbonilla.ticketing.expirer.usecase.expirereservations.ExpirationResult;
 import com.dbonilla.ticketing.expirer.usecase.expirereservations.ExpireReservationsUseCase;
 import com.dbonilla.ticketing.expirer.usecase.reconcilestuckorders.ReconcileStuckOrdersUseCase;
@@ -21,6 +22,6 @@ public class StubComponentsProvider implements ExpirerComponentsProvider {
         ReconcileStuckOrdersUseCase reconcile = mock(ReconcileStuckOrdersUseCase.class);
         when(expire.execute(any())).thenReturn(Mono.just(ExpirationResult.EMPTY));
         when(reconcile.execute(any())).thenReturn(Mono.just(ReconciliationResult.EMPTY));
-        return new ExpirerComponents(expire, reconcile, Clock.systemUTC());
+        return new ExpirerComponents(expire, reconcile, Clock.systemUTC(), RunMetricsPublisher.NOOP);
     }
 }

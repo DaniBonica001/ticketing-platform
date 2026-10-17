@@ -5,5 +5,6 @@ dependencies {
     implementation 'org.slf4j:slf4j-api'
     implementation 'software.amazon.awssdk:sqs'
     implementation 'tools.jackson.core:jackson-databind'
-    testImplementation 'io.opentelemetry:opentelemetry-api'
+    implementation 'io.opentelemetry:opentelemetry-api'
+    testImplementation 'io.opentelemetry:opentelemetry-sdk-testing'
 }

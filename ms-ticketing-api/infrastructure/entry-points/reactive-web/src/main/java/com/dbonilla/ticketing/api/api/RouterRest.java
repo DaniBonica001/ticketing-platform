@@ -9,6 +9,7 @@ import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.ServerResponse;
 
 import static org.springframework.web.reactive.function.server.RequestPredicates.GET;
+import static org.springframework.web.reactive.function.server.RequestPredicates.HEAD;
 import static org.springframework.web.reactive.function.server.RequestPredicates.POST;
 import static org.springframework.web.reactive.function.server.RequestPredicates.PUT;
 import static org.springframework.web.reactive.function.server.RouterFunctions.route;
@@ -29,7 +30,7 @@ public class RouterRest {
                                                          OrderHandler orders) {
         return route(GET(EVENTS), events::list)
                 .andRoute(POST(EVENTS), events::create)
-                .andRoute(GET(EVENT), events::get)
+                .andRoute(GET(EVENT).or(HEAD(EVENT)), events::get)
                 .andRoute(PUT(EVENT), events::update)
                 .andRoute(GET(EVENT + "/availability"), availability::get)
                 .andRoute(GET(EVENT + "/availability/stream"), availability::stream)
