@@ -1,0 +1,245 @@
+# Local runtime for the ticketing platform (ADR-0008). Names, ports and variables follow
+# docs/design/conventions.md. Bring everything up with `make keys && make up`
+# (equivalent to `scripts/generate-dev-keys.sh && docker compose up -d --build`).
+#
+# Startup order:
+#   localstack (healthy) + expirer-builder (zip built) -> aws-bootstrap (resources created)
+#   -> ms-ticketing-api / ms-order-processor (also wait for otel-lgtm healthy)
+#
+# Networks:
+#   ticketing-internal  internal: true (no internet). API, processor, LocalStack, OTel, bootstrap
+#                       and the Lambda containers LocalStack spawns (LAMBDA_DOCKER_NETWORK).
+#   ticketing-edge      API <-> host. Only ms-ticketing-api publishes its port here.
+#   ticketing-ops       Docker cannot publish ports of a container attached only to an internal
+#                       network, so LocalStack and Grafana join this bridge solely to expose their
+#                       loopback debug ports. The one-shot expirer-builder also uses it because Gradle
+#                       must download the wrapper distribution and dependencies.
+name: ticketing
+
+x-aws-env: &aws-env
+  AWS_REGION: ${AWS_REGION:-us-east-1}
+  AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+  AWS_ENDPOINT_URL: http://localstack:4566
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+
+x-resource-env: &resource-env
+  EVENTS_TABLE: ticketing-events
+  ORDERS_TABLE: ticketing-orders
+  AUDIT_TABLE: ticketing-order-audit
+  ORDERS_QUEUE_URL: http://localstack:4566/000000000000/ticketing-orders-queue
+  CONFIRMATIONS_QUEUE_URL: http://localstack:4566/000000000000/ticketing-confirmations-queue
+
+x-payment-secret-env: &payment-secret-env
+  PAYMENT_GATEWAY_SECRET_ID: ticketing/payment-gateway
+
+x-otel-env: &otel-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+  OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=local
+
+# Shared hardening for the application containers (ADR-0006).
+x-app-hardening: &app-hardening
+  read_only: true
+  tmpfs:
+    # exec stays allowed: Netty and the AWS CRT unpack their JNI libraries into /tmp.
+    - /tmp:rw,nosuid,size=64m
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  init: true
+  stop_grace_period: 20s
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+x-app-healthcheck: &app-healthcheck
+  test: ["CMD", "wget", "-qO-", "http://localhost:9090/actuator/health/liveness"]
+  interval: 10s
+  timeout: 3s
+  retries: 12
+  start_period: 60s
+
+x-app-depends-on: &app-depends-on
+  aws-bootstrap:
+    condition: service_completed_successfully
+  otel-lgtm:
+    condition: service_healthy
+
+services:
+  localstack:
+    image: localstack/localstack:4.14.0@sha256:3ebc37595918b8accb852f8048fef2aff047d465167edd655528065b07bc364a
+    # Fixed name so MAIN_CONTAINER_NAME matches and spawned Lambda containers are easy to identify
+    # (ticketing-localstack-lambda-*).
+    container_name: ticketing-localstack
+    ports:
+      - "127.0.0.1:4766:4566"
+    environment:
+      SERVICES: dynamodb,sqs,lambda,events,secretsmanager,iam,sts,logs,kms,cloudwatch,s3
+      MAIN_CONTAINER_NAME: ticketing-localstack
+      LAMBDA_DOCKER_NETWORK: ticketing-internal
+      # Java cold starts on LocalStack can exceed the 20 s default.
+      LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT: "60"
+      LAMBDA_REMOVE_CONTAINERS: "1"
+      # Queue URLs come back as http://localstack:4566/000000000000/<name>, matching conventions §5.
+      SQS_ENDPOINT_STRATEGY: "off"
+      LOCALSTACK_HOST: localstack:4566
+      DEBUG: ${LOCALSTACK_DEBUG:-0}
+    volumes:
+      # Required so LocalStack can run Lambda functions in sibling containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      ticketing-internal:
+        aliases: [localstack]
+      ticketing-ops: {}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  expirer-builder:
+    image: eclipse-temurin:25-jdk@sha256:63f965b560b905c9633218330ac3516304b526a74fdc323a504b05c06e712c30
+    entrypoint: ["bash", "/builder/build.sh"]
+    environment:
+      GRADLE_USER_HOME: /gradle-cache
+      GRADLE_OPTS: -Dorg.gradle.daemon=false
+    volumes:
+      - type: bind
+        source: ${EXPIRER_SRC_DIR:-./ms-reservation-expirer}
+        target: /src
+        read_only: true
+        bind:
+          create_host_path: false
+      - ./local/expirer-builder/build.sh:/builder/build.sh:ro
+      - expirer-dist:/dist
+      - gradle-cache:/gradle-cache
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - ticketing-ops
+    restart: "no"
+
+  aws-bootstrap:
+    image: amazon/aws-cli:2.31.18@sha256:1a491b258590cc66866cd550f592edff80082f44daf1d903820daeca2f4954de
+    entrypoint: ["bash", "/bootstrap/bootstrap.sh"]
+    environment:
+      <<: [*aws-env, *resource-env, *payment-secret-env, *otel-env]
+      AWS_PAGER: ""
+      PAYMENT_GATEWAY_API_KEY: ${PAYMENT_GATEWAY_API_KEY:-}
+      LAMBDA_ZIP_PATH: /artifacts/ms-reservation-expirer.zip
+      ENABLE_KMS: ${ENABLE_KMS:-true}
+      SKIP_LAMBDA: ${SKIP_LAMBDA:-false}
+    volumes:
+      - ./local/bootstrap:/bootstrap:ro
+      - expirer-dist:/artifacts:ro
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - ticketing-internal
+    depends_on:
+      localstack:
+        condition: service_healthy
+      expirer-builder:
+        condition: service_completed_successfully
+    restart: "no"
+
+  otel-lgtm:
+    image: grafana/otel-lgtm:0.36.0@sha256:57c04cbd8e7022f32bb84c4ac005d79baf8b08e2c5be44facf11f5f1f9944ba2
+    ports:
+      # Grafana only; OTLP 4317/4318 stay on the internal network.
+      - "127.0.0.1:3300:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_VIEWERS_CAN_EDIT: "true" # lets anonymous viewers use Explore
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./local/grafana/provisioning/dashboards/ticketing.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/ticketing.yaml:ro
+      - ./local/grafana/dashboards:/otel-lgtm/ticketing-dashboards:ro
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      ticketing-internal:
+        aliases: [otel-lgtm]
+      ticketing-ops: {}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/api/health >/dev/null && curl -s -o /dev/null http://localhost:4318/"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+      start_period: 15s
+
+  ms-ticketing-api:
+    <<: *app-hardening
+    build:
+      context: ./ms-ticketing-api
+      dockerfile: deployment/Dockerfile
+    image: ticketing/ms-ticketing-api:local
+    ports:
+      - "127.0.0.1:8090:8080"
+    environment:
+      <<: [*aws-env, *resource-env, *otel-env]
+      JWT_ISSUER: ${JWT_ISSUER:-https://auth.ticketing.local}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-ticketing-api}
+      JWT_PUBLIC_KEY_LOCATION: file:/run/secrets/jwt-public.pem
+      OTEL_SERVICE_NAME: ms-ticketing-api
+    secrets:
+      - source: jwt_public_key
+        target: jwt-public.pem
+    networks:
+      - ticketing-edge
+      - ticketing-internal
+    healthcheck: *app-healthcheck
+    depends_on: *app-depends-on
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+          pids: 256
+
+  ms-order-processor:
+    <<: *app-hardening
+    build:
+      context: ./ms-order-processor
+      dockerfile: deployment/Dockerfile
+    image: ticketing/ms-order-processor:local
+    environment:
+      <<: [*aws-env, *resource-env, *payment-secret-env, *otel-env]
+      OTEL_SERVICE_NAME: ms-order-processor
+    networks:
+      - ticketing-internal
+    healthcheck: *app-healthcheck
+    depends_on: *app-depends-on
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+          pids: 256
+
+secrets:
+  jwt_public_key:
+    file: ${JWT_PUBLIC_KEY_FILE:-./local/secrets/jwt-public.pem}
+
+volumes:
+  expirer-dist:
+  gradle-cache:
+
+networks:
+  ticketing-edge:
+    name: ticketing-edge
+    driver: bridge
+  ticketing-internal:
+    name: ticketing-internal
+    driver: bridge
+    internal: true
+  ticketing-ops:
+    name: ticketing-ops
+    driver: bridge

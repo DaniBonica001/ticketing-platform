@@ -1,0 +1,4 @@
+Marker for local/expirer-builder/build.sh: compile the stub handler in this directory instead of
+running Gradle. Used only to validate the local environment before ms-reservation-expirer exists:
+
+  EXPIRER_SRC_DIR=./local/expirer-builder/placeholder docker compose up -d localstack otel-lgtm aws-bootstrap
