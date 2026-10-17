@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ticketing.local/contracts/messages/order-message.schema.json",
+  "title": "OrderMessage",
+  "description": "Envelope for messages published to ticketing-orders-queue (OrderPlaced) and ticketing-confirmations-queue (OrderConfirmationRequested). Messages are thin: consumers must read the order from DynamoDB (source of truth). Trace context travels in the SQS message attribute 'traceparent' (W3C); the attribute 'messageType' mirrors the 'type' field.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["messageId", "type", "version", "occurredAt", "payload"],
+  "properties": {
+    "messageId": {
+      "description": "Unique id of this message (UUID v4). A re-published message gets a new id.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "type": {
+      "description": "OrderPlaced -> orders-queue; OrderConfirmationRequested -> confirmations-queue.",
+      "type": "string",
+      "enum": ["OrderPlaced", "OrderConfirmationRequested"]
+    },
+    "version": {
+      "description": "Schema version of the message.",
+      "type": "integer",
+      "const": 1
+    },
+    "occurredAt": {
+      "description": "ISO-8601 UTC timestamp with milliseconds.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "producer": {
+      "description": "Component that published the message.",
+      "type": "string",
+      "enum": ["ticketing-api", "reservation-expirer"]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["orderId", "eventId"],
+      "properties": {
+        "orderId": { "type": "string", "format": "uuid" },
+        "eventId": { "type": "string", "format": "uuid" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "messageId": "7d1c0b8e-3f0a-4a8e-9a55-2b8f1c4e9d10",
+      "type": "OrderPlaced",
+      "version": 1,
+      "occurredAt": "2026-10-16T10:00:00.123Z",
+      "producer": "ticketing-api",
+      "payload": {
+        "orderId": "3f2c9a54-1b7e-5d2a-8c4f-0e6b9d1a7c33",
+        "eventId": "8b0e4f1a-6c2d-4e9b-b1a3-5d7c9e0f2a64"
+      }
+    },
+    {
+      "messageId": "a4e9f2c1-7b3d-4c8e-9f10-6d2b8a1c5e77",
+      "type": "OrderConfirmationRequested",
+      "version": 1,
+      "occurredAt": "2026-10-16T10:05:00.456Z",
+      "producer": "ticketing-api",
+      "payload": {
+        "orderId": "3f2c9a54-1b7e-5d2a-8c4f-0e6b9d1a7c33",
+        "eventId": "8b0e4f1a-6c2d-4e9b-b1a3-5d7c9e0f2a64"
+      }
+    }
+  ]
+}
