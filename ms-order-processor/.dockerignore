@@ -1,0 +1,8 @@
+**/build/
+build-cache/
+.gradle/
+**/.gradle/
+.idea/
+*.iml
+deployment/
+**/src/test/

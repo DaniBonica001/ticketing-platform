@@ -1,0 +1,104 @@
+plugins {
+	id 'co.com.bancolombia.cleanArchitecture'
+	id 'org.springframework.boot' apply false
+    id 'org.sonarqube'
+    id 'info.solidsoft.pitest'
+}
+
+allprojects {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+		implementation platform('software.amazon.awssdk:bom:2.56.0')
+    }
+}
+
+// Force dependency versions to address reported vulnerabilities.
+dependenciesOverride {
+   ensure 'com.fasterxml.jackson.core:jackson-core:2.22.3'
+   ensure 'tools.jackson.core:jackson-core:3.2.3'
+}
+
+subprojects {
+    // Remove once it has been updated in Spring Boot
+    ext['jackson-2-bom.version'] = "2.22.3"
+    ext['jackson-bom.version'] = "3.2.3"
+}
+
+ext {
+    resilience4jVersion = '2.4.0'
+    secretsManagerVersion = '4.5.3'
+}
+
+// Gradle's default 512 MB test heap is not enough when module test JVMs run in parallel
+// (org.gradle.parallel=true) alongside the Testcontainers integration tests.
+subprojects {
+    tasks.withType(Test).configureEach {
+        maxHeapSize = '1g'
+    }
+}
+
+// Integration tests (Testcontainers) are excluded from mutation testing: they start containers
+// and would be re-executed for every mutant.
+subprojects {
+    plugins.withId('info.solidsoft.pitest') {
+        afterEvaluate {
+            pitest {
+                excludedTestClasses = ['**.*IntegrationTest']
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Coverage gate: merged line coverage of every module must be >= 90 %.
+// Excluded: the Spring Boot main class and pure configuration classes (bean wiring only).
+// ---------------------------------------------------------------------------
+def coverageExclusions = [
+        '**/MainApplication*',
+        '**/config/*Config.class',
+        '**/config/*Config$*.class',
+        '**/config/*Properties.class'
+]
+
+def coveredProjects = subprojects
+def coverageVerification = tasks.register('jacocoCoverageVerification', JacocoCoverageVerification) {
+    group = 'verification'
+    description = 'Fails the build when merged line coverage is below 90 %.'
+    coveredProjects.each { dependsOn("${it.path}:test") }
+    executionData.from(coveredProjects.collect { fileTree(it.layout.buildDirectory.dir('jacoco')) { include '*.exec' } })
+    sourceDirectories.from(coveredProjects.collect { it.file('src/main/java') })
+    classDirectories.from(coveredProjects.collect {
+        fileTree(it.layout.buildDirectory.dir('classes/java/main')) { exclude coverageExclusions }
+    })
+    violationRules {
+        rule {
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = 0.90
+            }
+        }
+    }
+}
+
+def coverageReport = tasks.register('jacocoCoverageReport', JacocoReport) {
+    group = 'verification'
+    description = 'Merged coverage report (same scope as the coverage gate).'
+    coveredProjects.each { dependsOn("${it.path}:test") }
+    executionData.from(coveredProjects.collect { fileTree(it.layout.buildDirectory.dir('jacoco')) { include '*.exec' } })
+    sourceDirectories.from(coveredProjects.collect { it.file('src/main/java') })
+    classDirectories.from(coveredProjects.collect {
+        fileTree(it.layout.buildDirectory.dir('classes/java/main')) { exclude coverageExclusions }
+    })
+    reports {
+        xml.required = true
+        csv.required = true
+        html.required = true
+    }
+}
+
+coverageVerification.configure { dependsOn(coverageReport) }
+
+tasks.matching { it.name == 'build' }.configureEach { dependsOn(coverageVerification) }
