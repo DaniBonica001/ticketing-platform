@@ -31,6 +31,17 @@
 - Local: la red Docker `ticketing-internal` es `internal: true`; solo el API publica un puerto
   (`127.0.0.1:8090`).
 
+### IP del cliente para el rate limit (proxies de confianza)
+Detrás del NLB la conexión TCP llega desde el balanceador, no desde el cliente: usar esa dirección como
+llave haría que todos los clientes compartieran un único bucket (un abusador a 50 req/s dejaría en 429
+todas las lecturas públicas). Por eso API Gateway **sobrescribe** el header `X-Client-Ip` con
+`context.identity.sourceIp` en la integración (un valor enviado por el cliente nunca llega al servicio), y
+el servicio solo lo lee cuando el peer TCP pertenece a `ticketing.rate-limit.trusted-proxies` (en AWS, los
+CIDR de las subnets privadas del NLB, vía `TICKETING_RATE_LIMIT_TRUSTED_PROXIES`). Desde un peer no
+confiable el header se ignora, y un valor que no es un literal IP (sin resolver DNS) se descarta: en ambos
+casos la llave es la dirección del peer. Por defecto la lista está vacía y el comportamiento es el de
+siempre (local con docker-compose).
+
 ## OWASP Top 10:2025: controles
 
 | Categoría | Controles |

@@ -19,11 +19,14 @@ import software.amazon.awssdk.services.sqs.model.Message;
 import software.amazon.awssdk.services.sqs.model.MessageSystemAttributeName;
 
 import java.time.Duration;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 
 /**
  * Validates one message, runs the use case of its queue and decides whether the message is deleted.
  * Delete ONLY on success, duplicate or business rejection; every failure keeps the message (redelivery, then DLQ).
+ * The use case runs under a per-message deadline shorter than the queue's visibility timeout, so a slow message is
+ * abandoned (and kept) before SQS makes it visible again while it is still in flight.
  */
 public class OrderMessageProcessor implements Function<Message, Mono<MessageDisposition>> {
 
@@ -34,9 +37,15 @@ public class OrderMessageProcessor implements Function<Message, Mono<MessageDisp
     private final OrderMessageValidator validator;
     private final MessageTracing tracing;
     private final BusinessMetrics metrics;
+    private final Duration deadline;
 
     public OrderMessageProcessor(MessageType expectedType, Function<OrderCommand, Mono<ProcessingOutcome>> useCase,
-                                 OrderMessageValidator validator, MessageTracing tracing, BusinessMetrics metrics) {
+                                 OrderMessageValidator validator, MessageTracing tracing, BusinessMetrics metrics,
+                                 Duration deadline) {
+        if (deadline == null || deadline.isNegative() || deadline.isZero()) {
+            throw new IllegalArgumentException("deadline must be positive");
+        }
+        this.deadline = deadline;
         this.expectedType = expectedType;
         this.useCase = useCase;
         this.validator = validator;
@@ -64,7 +73,8 @@ public class OrderMessageProcessor implements Function<Message, Mono<MessageDisp
     private Mono<Result> execute(OrderMessage orderMessage, String traceId, Message message) {
         OrderCommand command = new OrderCommand(orderMessage.messageId(), orderMessage.orderId(),
                 orderMessage.eventId(), traceId);
-        return useCase.apply(command)
+        return Mono.defer(() -> useCase.apply(command))
+                .timeout(deadline)
                 .map(outcome -> {
                     log.info("{} message {} for order {} processed: {} (receiveCount={})", expectedType.wireName(),
                             message.messageId(), command.orderId(), outcome, receiveCount(message));
@@ -78,15 +88,16 @@ public class OrderMessageProcessor implements Function<Message, Mono<MessageDisp
     }
 
     private Result failure(Message message, String orderId, Throwable error) {
-        String outcome = switch (error) {
-            case InvalidMessageException invalid -> "INVALID_MESSAGE";
-            case TransientFailureException transientFailure -> "TRANSIENT_FAILURE";
-            case PaymentGatewayUnavailableException unavailable -> "PAYMENT_GATEWAY_UNAVAILABLE";
-            case OrderNotFoundException notFound -> "ORDER_NOT_FOUND";
-            case InventoryConditionFailedException inconsistent -> "INVENTORY_INCONSISTENT";
-            default -> "UNEXPECTED_ERROR";
+        FailureOutcome outcome = switch (error) {
+            case InvalidMessageException invalid -> FailureOutcome.INVALID_MESSAGE;
+            case TransientFailureException transientFailure -> FailureOutcome.TRANSIENT_FAILURE;
+            case PaymentGatewayUnavailableException unavailable -> FailureOutcome.PAYMENT_GATEWAY_UNAVAILABLE;
+            case OrderNotFoundException notFound -> FailureOutcome.ORDER_NOT_FOUND;
+            case InventoryConditionFailedException inconsistent -> FailureOutcome.INVENTORY_INCONSISTENT;
+            case TimeoutException timeout -> FailureOutcome.PROCESSING_TIMEOUT;
+            default -> FailureOutcome.UNEXPECTED_ERROR;
         };
-        if ("UNEXPECTED_ERROR".equals(outcome) || "INVENTORY_INCONSISTENT".equals(outcome)) {
+        if (outcome.isUnexpected()) {
             log.error("{} message {} for order {} failed ({}); kept for redelivery (receiveCount={})",
                     expectedType.wireName(), message.messageId(), orderId, outcome, receiveCount(message), error);
         } else {
@@ -94,7 +105,7 @@ public class OrderMessageProcessor implements Function<Message, Mono<MessageDisp
                     expectedType.wireName(), message.messageId(), orderId, outcome, error.getMessage(),
                     receiveCount(message));
         }
-        return new Result(MessageDisposition.RETAIN, outcome);
+        return new Result(MessageDisposition.RETAIN, outcome.name());
     }
 
     private static String receiveCount(Message message) {

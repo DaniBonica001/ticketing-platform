@@ -2,6 +2,7 @@ package com.dbonilla.ticketing.api.usecase.confirmorder;
 
 import com.dbonilla.ticketing.api.model.exception.OrderNotFoundException;
 import com.dbonilla.ticketing.api.model.exception.ReservationExpiredException;
+import com.dbonilla.ticketing.api.model.exception.ServiceUnavailableException;
 import com.dbonilla.ticketing.api.model.order.ConfirmDecision;
 import com.dbonilla.ticketing.api.model.order.ConfirmWriteResult;
 import com.dbonilla.ticketing.api.model.order.Order;
@@ -70,10 +71,13 @@ public class ConfirmOrderUseCase {
         };
     }
 
-    /** Same dual-write policy as T1: the expirer re-publishes stuck confirmations (ADR-0005, R2). */
+    /**
+     * Same dual-write policy as T1: only when the queue stays unavailable after the retries is the failure
+     * absorbed, because the expirer re-publishes stuck confirmations (ADR-0005, R2).
+     */
     private Mono<Order> enqueue(Order order) {
         return publisher.publishConfirmationRequested(order)
-                .onErrorResume(error -> Mono.empty())
+                .onErrorResume(ServiceUnavailableException.class, unavailable -> Mono.empty())
                 .thenReturn(order);
     }
 }

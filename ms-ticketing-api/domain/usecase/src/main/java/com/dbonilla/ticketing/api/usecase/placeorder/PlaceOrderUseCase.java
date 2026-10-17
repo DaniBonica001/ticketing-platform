@@ -2,6 +2,7 @@ package com.dbonilla.ticketing.api.usecase.placeorder;
 
 import com.dbonilla.ticketing.api.model.event.gateways.EventRepository;
 import com.dbonilla.ticketing.api.model.exception.EventNotFoundException;
+import com.dbonilla.ticketing.api.model.exception.ServiceUnavailableException;
 import com.dbonilla.ticketing.api.model.order.Order;
 import com.dbonilla.ticketing.api.model.order.OrderIdentity;
 import com.dbonilla.ticketing.api.model.order.OrderPolicy;
@@ -53,12 +54,13 @@ public class PlaceOrderUseCase {
     }
 
     /**
-     * The order is already durable as QUEUED: if the message cannot be published the reservation
-     * expirer re-publishes it once its deadline passes (ADR-0005, R1), so the client still gets 202.
+     * The order is already durable as QUEUED: if the queue stays unavailable after the retries
+     * ({@link ServiceUnavailableException}) the reservation expirer re-publishes it once its deadline passes
+     * (ADR-0005, R1), so the client still gets 202. Any other failure is unexpected and propagates.
      */
     private Mono<Order> enqueue(Order order) {
         return publisher.publishOrderPlaced(order)
-                .onErrorResume(error -> Mono.empty())
+                .onErrorResume(ServiceUnavailableException.class, unavailable -> Mono.empty())
                 .thenReturn(order);
     }
 }

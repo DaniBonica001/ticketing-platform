@@ -25,6 +25,8 @@ public class SQSListener {
 
     private static final Logger log = LoggerFactory.getLogger(SQSListener.class);
     private static final String ALL_ATTRIBUTES = "All";
+    /** Time on top of the long poll for SQS to answer an empty receive before the client gives up. */
+    static final Duration RECEIVE_TIMEOUT_MARGIN = Duration.ofSeconds(5);
 
     private final SqsAsyncClient client;
     private final ListenerSettings settings;
@@ -55,13 +57,21 @@ public class SQSListener {
         return !pollers.isDisposed() && pollers.size() > 0;
     }
 
-    Flux<Void> poll() {
+    /**
+     * Polls forever. The backoff counts consecutive failures only ({@code transientErrors}): a successful receive
+     * resets it, so an isolated blip late in the pod's life waits the minimum backoff, not the maximum. The reset
+     * is driven by {@code onNext}, so every completed receive emits one signal.
+     */
+    Mono<Void> poll() {
         return Mono.defer(this::receiveAndProcess)
+                .thenReturn(Boolean.TRUE)
                 .repeat()
                 .retryWhen(Retry.backoff(Long.MAX_VALUE, settings.errorBackoff())
                         .maxBackoff(settings.maxErrorBackoff())
+                        .transientErrors(true)
                         .doBeforeRetry(signal -> log.warn("Error receiving from queue {}: {}", settings.queueUrl(),
-                                signal.failure().toString())));
+                                signal.failure().toString())))
+                .then();
     }
 
     Mono<Void> receiveAndProcess() {
@@ -95,7 +105,9 @@ public class SQSListener {
     }
 
     private ReceiveMessageRequest receiveRequest() {
+        Duration receiveTimeout = Duration.ofSeconds(settings.waitTimeSeconds()).plus(RECEIVE_TIMEOUT_MARGIN);
         ReceiveMessageRequest.Builder builder = ReceiveMessageRequest.builder()
+                .overrideConfiguration(o -> o.apiCallTimeout(receiveTimeout).apiCallAttemptTimeout(receiveTimeout))
                 .queueUrl(settings.queueUrl())
                 .maxNumberOfMessages(settings.maxNumberOfMessages())
                 .waitTimeSeconds(settings.waitTimeSeconds())

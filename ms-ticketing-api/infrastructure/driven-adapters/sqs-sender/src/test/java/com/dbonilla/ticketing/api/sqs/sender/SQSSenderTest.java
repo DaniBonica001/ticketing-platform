@@ -1,10 +1,12 @@
 package com.dbonilla.ticketing.api.sqs.sender;
 
+import com.dbonilla.ticketing.api.model.exception.ServiceUnavailableException;
 import com.dbonilla.ticketing.api.model.order.Order;
 import com.dbonilla.ticketing.api.model.order.OrderStatus;
 import com.dbonilla.ticketing.api.resilience.RetryProperties;
 import com.dbonilla.ticketing.api.resilience.TransientRetry;
 import com.dbonilla.ticketing.api.sqs.sender.config.SQSSenderProperties;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
@@ -60,6 +62,7 @@ class SQSSenderTest {
 
     private final JsonMapper jsonMapper = JsonMapper.builder().build();
     private final InMemorySpanExporter spans = InMemorySpanExporter.create();
+    private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
     private SQSSender sender;
 
     @BeforeEach
@@ -67,10 +70,10 @@ class SQSSenderTest {
         OpenTelemetrySdk openTelemetry = OpenTelemetrySdk.builder()
                 .setTracerProvider(SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(spans)).build())
                 .build();
-        SQSSenderProperties properties = new SQSSenderProperties("us-east-1", null, ORDERS_URL, CONFIRMATIONS_URL);
+        SQSSenderProperties properties = new SQSSenderProperties("us-east-1", null, ORDERS_URL, CONFIRMATIONS_URL, null, null);
         TransientRetry retry = new TransientRetry(new RetryProperties(3, Duration.ofMillis(1), Duration.ofMillis(2), 0.5));
         sender = new SQSSender(client, properties, retry, jsonMapper, Clock.fixed(NOW, ZoneOffset.UTC),
-                openTelemetry);
+                openTelemetry, meterRegistry);
     }
 
     private SendMessageRequest sentRequest() {
@@ -142,12 +145,18 @@ class SQSSenderTest {
     }
 
     @Test
-    void retriesTransientFailuresThreeTimesThenFails() {
+    void retriesTransientFailuresThreeTimesThenReportsTheQueueAsUnavailable() {
         when(client.sendMessage(any(SendMessageRequest.class)))
                 .thenReturn(CompletableFuture.failedFuture(SdkClientException.create("connection refused")));
 
-        StepVerifier.create(sender.publishOrderPlaced(ORDER)).verifyError(SdkClientException.class);
+        StepVerifier.create(sender.publishOrderPlaced(ORDER))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(ServiceUnavailableException.class)
+                        .hasCauseInstanceOf(SdkClientException.class))
+                .verify();
         verify(client, times(4)).sendMessage(any(SendMessageRequest.class));
+        assertThat(meterRegistry.get(SQSSender.PUBLISH_FAILED_METRIC).tag("messageType", "OrderPlaced").counter()
+                .count()).isEqualTo(1.0);
         SpanData span = onlySpan();
         assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
         assertThat(span.getEvents()).extracting(event -> event.getName()).contains("exception");
@@ -156,10 +165,11 @@ class SQSSenderTest {
     @Test
     void endsTheSpanWithErrorWhenTheMessageCannotBeBuilt() {
         SQSSender failing = new SQSSender(client,
-                new SQSSenderProperties("us-east-1", null, ORDERS_URL, CONFIRMATIONS_URL),
+                new SQSSenderProperties("us-east-1", null, ORDERS_URL, CONFIRMATIONS_URL, null, null),
                 new TransientRetry(new RetryProperties(3, Duration.ofMillis(1), Duration.ofMillis(2), 0.5)),
                 jsonMapper, null, OpenTelemetrySdk.builder().setTracerProvider(
-                        SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(spans)).build()).build());
+                        SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(spans)).build()).build(),
+                meterRegistry);
 
         StepVerifier.create(failing.publishOrderPlaced(ORDER)).verifyError(NullPointerException.class);
 
@@ -189,5 +199,7 @@ class SQSSenderTest {
 
         StepVerifier.create(sender.publishOrderPlaced(ORDER)).verifyError(AwsServiceException.class);
         verify(client, times(1)).sendMessage(any(SendMessageRequest.class));
+        assertThat(meterRegistry.find(SQSSender.PUBLISH_FAILED_METRIC).counter())
+                .as("only failures deferred to reconciliation are counted").isNull();
     }
 }

@@ -5,6 +5,10 @@ import reactor.core.publisher.Mono;
 
 /**
  * Publishes thin order messages to the processing queues.
+ * <p>
+ * Contract: a transient failure that survives the publisher's retries is signalled as
+ * {@link com.dbonilla.ticketing.api.model.exception.ServiceUnavailableException}; callers may defer those to
+ * reconciliation. Any other error is non-transient and must not be swallowed.
  */
 public interface OrderMessagePublisher {
 

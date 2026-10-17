@@ -37,6 +37,8 @@ exige el estado origen (ver [modelo de dominio](domain-model.md)).
 | Mismo key con otro payload | `requestHash` → `422 IDEMPOTENCY_KEY_REUSED` |
 | Acaparar inventario con muchas órdenes | Máximo 10 entradas por orden; rate limit por usuario en `POST /orders` (5 req/s, ráfaga 10) |
 | Inundar endpoints públicos | Rate limit por IP (50 req/s). En AWS se suman el throttling de API Gateway y una regla de WAF basada en tasa |
+| Abrir muchos streams SSE de disponibilidad | Tope de conexiones simultáneas a `GET /events/{id}/availability/stream`: 3 por cliente (`sub` si hay JWT; si no, IP) y 1 000 por instancia (configurable). Si se supera → `429 RATE_LIMITED` con `Retry-After`; el cupo se libera al terminar, fallar o cancelarse el stream |
+| Martillar confirmaciones u operaciones de admin | Rate limit por usuario (`sub`) con bucket propio: `POST /orders/{id}/confirm` (2 req/s, ráfaga 5) y operaciones de admin `POST /events`, `PUT /events/{id}`, `POST /events/{id}/complimentary` (5 req/s, ráfaga 10) → `429` con `Retry-After` |
 | Payloads gigantes | Límite de cuerpo de 16 KB → `413` |
 | Mensaje envenenado en SQS | DLQ tras 5 intentos + alarma; el consumidor valida el esquema |
 | Doble confirmación / doble cobro | Condición `status = RESERVED` en T4; si ya está `PENDING_CONFIRMATION` con la misma `paymentReference`, responde 202 idempotente |

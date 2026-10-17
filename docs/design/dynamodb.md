@@ -117,7 +117,7 @@ TransactWriteItems
   Update orders  SET #status = :PENDING_CONFIRMATION, paymentReference = :ref,
                      deadlineAt = :now + 300, updatedAt = :ts
                  Condition: #status = :RESERVED AND deadlineAt > :now AND userId = :caller
-  Update events  SET reserved = reserved - :q, pendingConfirmation = pendingConfirmation + :q
+  Update events  SET reserved = reserved - :q, pendingConfirmation = pendingConfirmation + :q, updatedAt = :ts
                  Condition: reserved >= :q
   Put    audit   {fromStatus=RESERVED, toStatus=PENDING_CONFIRMATION}
 ```
@@ -145,7 +145,7 @@ Si falla la condición de la orden, el usuario confirmó en ese mismo instante y
 ### T8: cortesía (`ticketing-api`, admin)
 ```
 TransactWriteItems
-  Update events  SET available = available - :q, complimentary = complimentary + :q
+  Update events  SET available = available - :q, complimentary = complimentary + :q, updatedAt = :ts
                  Condition: available >= :q
   Put    orders  {status=COMPLIMENTARY, userId=:recipient}  Condition: attribute_not_exists(orderId)
   Put    audit   {toStatus=COMPLIMENTARY, actor=ticketing-api}

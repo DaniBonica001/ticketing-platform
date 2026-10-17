@@ -1,6 +1,7 @@
 package com.dbonilla.ticketing.api.dynamodb;
 
 import com.dbonilla.ticketing.api.dynamodb.mapper.OrderItemMapper;
+import com.dbonilla.ticketing.api.dynamodb.support.Attributes;
 import com.dbonilla.ticketing.api.model.exception.InsufficientInventoryException;
 import com.dbonilla.ticketing.api.model.exception.ServiceUnavailableException;
 import com.dbonilla.ticketing.api.model.order.ConfirmWriteResult;
@@ -161,7 +162,10 @@ class OrderDynamoRepositoryTest {
         assertThat(request.transactItems()).hasSize(3);
         Update event = request.transactItems().get(0).update();
         assertThat(event.tableName()).isEqualTo("ticketing-events");
-        assertThat(event.updateExpression()).isEqualTo(OrderTransactions.COMPLIMENTARY_UPDATE);
+        assertThat(event.updateExpression())
+                .isEqualTo("SET available = available - :q, complimentary = complimentary + :q, updatedAt = :ts");
+        assertThat(event.expressionAttributeValues().get(":ts").s())
+                .isEqualTo(Attributes.TIMESTAMP.format(COMPLIMENTARY.updatedAt()));
         assertThat(event.conditionExpression()).isEqualTo("available >= :q");
         assertThat(event.expressionAttributeValues().get(":q").n()).isEqualTo("2");
         assertThat(request.transactItems().get(1).put().item().get("userId").s()).isEqualTo("vip");
@@ -214,7 +218,9 @@ class OrderDynamoRepositoryTest {
         assertThat(order.expressionAttributeValues().get(":ref").s()).isEqualTo("PAY-1");
         assertThat(order.expressionAttributeNames()).containsEntry("#status", "status");
         Update event = request.transactItems().get(1).update();
-        assertThat(event.updateExpression()).isEqualTo(OrderTransactions.CONFIRM_EVENT_UPDATE);
+        assertThat(event.updateExpression()).isEqualTo(
+                "SET reserved = reserved - :q, pendingConfirmation = pendingConfirmation + :q, updatedAt = :ts");
+        assertThat(event.expressionAttributeValues().get(":ts").s()).isEqualTo(Attributes.TIMESTAMP.format(NOW));
         assertThat(event.conditionExpression()).isEqualTo("reserved >= :q");
         assertThat(request.transactItems().get(2).put().item().get("fromStatus").s()).isEqualTo("RESERVED");
         assertThat(registry.get("ticketing.orders.transitions").tag("to", "PENDING_CONFIRMATION").counter().count())

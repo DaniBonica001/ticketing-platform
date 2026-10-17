@@ -49,6 +49,11 @@ entrypoint:
     visibility-timeout-seconds: 0
     number-of-threads: 1
     concurrency: 10
+    # SDK retries are off; these bound DeleteMessage. ReceiveMessage uses wait-time-seconds + 5 s.
+    api-call-timeout: "PT5S"
+    api-call-attempt-timeout: "PT2S"
+    # Deadline of one message, below the 30 s VisibilityTimeout: on expiry the message is kept (RETAIN), not deleted.
+    processing-timeout: "PT25S"
 
 ticketing:
   reservation:

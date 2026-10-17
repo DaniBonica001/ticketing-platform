@@ -51,7 +51,11 @@ import java.time.OffsetDateTime;
         "ticketing.rate-limit.orders.requests-per-second=10000",
         "ticketing.rate-limit.orders.burst=10000",
         "ticketing.rate-limit.public-endpoints.requests-per-second=10000",
-        "ticketing.rate-limit.public-endpoints.burst=10000"})
+        "ticketing.rate-limit.public-endpoints.burst=10000",
+        "ticketing.rate-limit.confirm.requests-per-second=10000",
+        "ticketing.rate-limit.confirm.burst=10000",
+        "ticketing.rate-limit.admin-operations.requests-per-second=10000",
+        "ticketing.rate-limit.admin-operations.burst=10000"})
 public abstract class WebTestBase {
 
     protected static final Instant NOW = Instant.parse("2026-10-16T10:00:00.123Z");

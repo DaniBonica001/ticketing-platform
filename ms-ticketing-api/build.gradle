@@ -32,6 +32,18 @@ subprojects {
     }
 }
 
+// Integration tests (Testcontainers) are excluded from mutation testing: they start containers
+// and would be re-executed for every mutant. They still run in `test` and count toward coverage.
+subprojects {
+    plugins.withId('info.solidsoft.pitest') {
+        afterEvaluate {
+            pitest {
+                excludedTestClasses = ['**.*IntegrationTest']
+            }
+        }
+    }
+}
+
 // Coverage gate (deliverable: >= 90% line coverage over the whole project).
 // Exclusions: only the Spring Boot main class.
 def coverageExclusions = ['**/MainApplication.class']
