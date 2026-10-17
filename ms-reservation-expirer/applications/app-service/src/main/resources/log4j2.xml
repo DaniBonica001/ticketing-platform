@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- One JSON object per line on stdout (CloudWatch Logs / Loki). Thread-context fields become top-level keys. -->
+<Configuration status="WARN" shutdownHook="disable">
+    <Appenders>
+        <Console name="STDOUT" target="SYSTEM_OUT">
+            <JsonTemplateLayout eventTemplateUri="classpath:ExpirerJsonLayout.json"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Logger name="software.amazon.awssdk" level="WARN"/>
+        <Logger name="io.netty" level="WARN"/>
+        <Root level="${env:LOG_LEVEL:-INFO}">
+            <AppenderRef ref="STDOUT"/>
+        </Root>
+    </Loggers>
+</Configuration>

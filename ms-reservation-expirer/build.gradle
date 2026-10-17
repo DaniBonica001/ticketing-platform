@@ -1,0 +1,66 @@
+plugins {
+	id 'co.com.bancolombia.cleanArchitecture'
+	id 'org.springframework.boot' apply false
+    id 'org.sonarqube'
+    id 'info.solidsoft.pitest'
+}
+
+allprojects {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+		implementation platform('software.amazon.awssdk:bom:2.56.0')
+    }
+}
+
+// Force dependency versions to address reported vulnerabilities.
+dependenciesOverride {
+   ensure 'com.fasterxml.jackson.core:jackson-core:2.22.3'
+   ensure 'tools.jackson.core:jackson-core:3.2.3'
+}
+
+subprojects {
+    // Remove once it has been updated in Spring Boot
+    ext['jackson-2-bom.version'] = "2.22.3"
+    ext['jackson-bom.version'] = "3.2.3"
+
+    // The expirer is a plain AWS Lambda wired by hand (no Spring context, see README).
+    // Spring artifacts injected by the scaffold conventions are kept out of the production
+    // classpaths; only the version BOM (spring-boot-dependencies) is still used.
+    configurations.matching { it.name in ['compileClasspath', 'runtimeClasspath'] }.configureEach {
+        exclude group: 'org.springframework'
+        exclude group: 'org.springframework.boot', module: 'spring-boot-starter'
+        exclude group: 'org.springframework.boot', module: 'spring-boot-autoconfigure'
+        exclude group: 'org.springframework.boot', module: 'spring-boot-devtools'
+        // Only the async Netty HTTP client is used; the sync Apache clients are dead weight.
+        exclude group: 'software.amazon.awssdk', module: 'apache-client'
+        exclude group: 'software.amazon.awssdk', module: 'apache5-client'
+        // Added by the scaffold conventions but not used by this component.
+        exclude group: 'io.projectreactor.addons', module: 'reactor-extra'
+    }
+    // Tests route logging through log4j2 (same as production), not through Spring's logback.
+    configurations.matching { it.name in ['testCompileClasspath', 'testRuntimeClasspath'] }.configureEach {
+        exclude group: 'org.springframework.boot', module: 'spring-boot-starter-logging'
+        exclude group: 'org.springframework.boot', module: 'spring-boot-devtools'
+    }
+
+    // Coverage gate: every module must keep at least 90% line coverage.
+    plugins.withId('jacoco') {
+        tasks.named('jacocoTestCoverageVerification') {
+            dependsOn tasks.named('test')
+            violationRules {
+                rule {
+                    limit {
+                        counter = 'LINE'
+                        value = 'COVEREDRATIO'
+                        minimum = 0.90
+                    }
+                }
+            }
+        }
+        tasks.named('check') {
+            dependsOn tasks.named('jacocoTestCoverageVerification')
+        }
+    }
+}

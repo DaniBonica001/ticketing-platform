@@ -1,0 +1,11 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id 'co.com.bancolombia.cleanArchitecture.settings' version '5.0.1'
+}
+
+rootProject.name = 'MsReservationExpirer'

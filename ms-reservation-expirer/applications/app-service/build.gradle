@@ -1,0 +1,47 @@
+dependencies {
+    implementation project(':model')
+    implementation project(':usecase')
+    implementation project(':dynamo-db')
+    implementation project(':sqs-sender')
+    implementation project(':retry')
+    implementation project(':lambda-handler')
+    implementation 'software.amazon.awssdk:dynamodb'
+    implementation 'software.amazon.awssdk:sqs'
+    implementation 'software.amazon.awssdk:netty-nio-client'
+
+    // Structured JSON logging (ECS-like layout) for the Lambda runtime; the AWS SDK logs through SLF4J.
+    runtimeOnly 'org.apache.logging.log4j:log4j-core'
+    runtimeOnly 'org.apache.logging.log4j:log4j-layout-template-json'
+    runtimeOnly 'org.apache.logging.log4j:log4j-slf4j2-impl'
+
+    testImplementation 'com.amazonaws:aws-lambda-java-core:1.4.0'
+    testImplementation 'tools.jackson.core:jackson-databind'
+}
+
+// Plain Lambda, no Spring Boot fat jar / main class.
+tasks.matching { it.name in ['bootJar', 'bootStartScripts', 'bootDistZip', 'bootDistTar', 'resolveMainClassName'] }
+        .configureEach { enabled = false }
+tasks.named('jar') { enabled = true }
+
+// Composition root that only builds AWS SDK clients: covered by the LocalStack smoke test, not unit tests.
+def coverageExclusions = ['**/expirer/bootstrap/AwsClientFactory*']
+tasks.withType(JacocoReport).configureEach {
+    classDirectories.setFrom(files(sourceSets.main.output.classesDirs).asFileTree.matching { exclude coverageExclusions })
+}
+tasks.withType(JacocoCoverageVerification).configureEach {
+    classDirectories.setFrom(files(sourceSets.main.output.classesDirs).asFileTree.matching { exclude coverageExclusions })
+}
+
+// Standard Java Lambda layout: compiled classes and resources at the root, dependencies in lib/.
+tasks.register('buildLambdaZip', Zip) {
+    group = 'build'
+    description = 'Packages the Lambda deployment zip (classes at root + lib/*.jar).'
+    archiveFileName = 'ms-reservation-expirer.zip'
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    from sourceSets.main.output
+    into('lib') {
+        from configurations.runtimeClasspath
+    }
+    reproducibleFileOrder = true
+    preserveFileTimestamps = false
+}

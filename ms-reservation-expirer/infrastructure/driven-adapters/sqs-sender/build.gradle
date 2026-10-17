@@ -1,0 +1,6 @@
+dependencies {
+    implementation project(':model')
+    implementation project(':retry')
+    implementation 'software.amazon.awssdk:sqs'
+    implementation 'com.fasterxml.jackson.core:jackson-core'
+}
