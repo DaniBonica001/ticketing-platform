@@ -1,0 +1,89 @@
+# Every environment-specific value comes from the environment variables of docs/design/conventions.md.
+server:
+  port: 8080
+  shutdown: graceful
+spring:
+  application:
+    name: ${OTEL_SERVICE_NAME:ms-ticketing-api}
+  main:
+    banner-mode: "off"
+  reactor:
+    context-propagation: auto
+management:
+  server:
+    port: 9090
+  endpoints:
+    access:
+      default: none
+    web:
+      exposure:
+        include: "health,info,prometheus"
+  endpoint:
+    health:
+      access: read-only
+      probes:
+        enabled: true
+      show-details: never
+    info:
+      access: read-only
+    prometheus:
+      access: read-only
+  tracing:
+    sampling:
+      probability: 1.0
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+  otlp:
+    metrics:
+      export:
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 30s
+logging:
+  structured:
+    format:
+      console: ecs
+    ecs:
+      service:
+        name: ${OTEL_SERVICE_NAME:ms-ticketing-api}
+aws:
+  region: ${AWS_REGION:us-east-1}
+  # Only defined locally (LocalStack). In AWS the default endpoints and the IAM role are used.
+  endpoint-url: ${AWS_ENDPOINT_URL:}
+adapter:
+  dynamodb:
+    events-table: ${EVENTS_TABLE:ticketing-events}
+    orders-table: ${ORDERS_TABLE:ticketing-orders}
+    audit-table: ${AUDIT_TABLE:ticketing-order-audit}
+  sqs:
+    region: ${AWS_REGION:us-east-1}
+    endpoint: ${AWS_ENDPOINT_URL:}
+    orders-queue-url: ${ORDERS_QUEUE_URL}
+    confirmations-queue-url: ${CONFIRMATIONS_QUEUE_URL}
+ticketing:
+  reservation:
+    ttl: PT10M
+  reconciliation:
+    deadline: PT5M
+  retry:
+    max-attempts: 3
+    min-backoff: 100ms
+    max-backoff: 2s
+    jitter: 0.5
+  rate-limit:
+    orders:
+      requests-per-second: 5
+      burst: 10
+    public-endpoints:
+      requests-per-second: 50
+      burst: 50
+    max-keys: 100000
+    idle-timeout: 1m
+  security:
+    jwt:
+      issuer: ${JWT_ISSUER}
+      audience: ${JWT_AUDIENCE}
+      public-key-location: ${JWT_PUBLIC_KEY_LOCATION}
+      clock-skew: 30s

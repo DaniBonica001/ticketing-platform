@@ -1,0 +1,80 @@
+plugins {
+	id 'co.com.bancolombia.cleanArchitecture'
+	id 'org.springframework.boot' apply false
+    id 'org.sonarqube'
+    id 'info.solidsoft.pitest'
+}
+
+allprojects {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+		implementation platform('software.amazon.awssdk:bom:2.56.0')
+    }
+}
+
+// Force dependency versions to address reported vulnerabilities.
+dependenciesOverride {
+   ensure 'com.fasterxml.jackson.core:jackson-core:2.22.3'
+   ensure 'tools.jackson.core:jackson-core:3.2.3'
+}
+
+subprojects {
+    // Remove once it has been updated in Spring Boot
+    ext['jackson-2-bom.version'] = "2.22.3"
+    ext['jackson-bom.version'] = "3.2.3"
+}
+
+subprojects {
+    tasks.withType(JavaCompile).configureEach {
+        options.compilerArgs.addAll(['-Xlint:deprecation', '-Xlint:unchecked'])
+    }
+}
+
+// Coverage gate (deliverable: >= 90% line coverage over the whole project).
+// Exclusions: only the Spring Boot main class.
+def coverageExclusions = ['**/MainApplication.class']
+def coveredProjects = subprojects
+
+def coverageInputs = { task ->
+    task.dependsOn(coveredProjects.collect { "${it.path}:test" })
+    task.executionData.from(coveredProjects.collect { sp ->
+        fileTree(sp.layout.buildDirectory) { include 'jacoco/test.exec' }
+    })
+    task.sourceDirectories.from(coveredProjects.collect { sp -> sp.file('src/main/java') })
+    task.classDirectories.from(coveredProjects.collect { sp ->
+        fileTree(sp.layout.buildDirectory.dir('classes/java/main')) { exclude coverageExclusions }
+    })
+}
+
+def coverageReport = tasks.register('jacocoCoverageReport', JacocoReport) {
+    group = 'verification'
+    description = 'Line coverage of every module, with the same exclusions as the gate.'
+    coverageInputs(it)
+    reports {
+        xml.required = true
+        html.required = true
+        xml.outputLocation = layout.buildDirectory.file('reports/jacocoCoverage/jacocoCoverage.xml')
+        html.outputLocation = layout.buildDirectory.dir('reports/jacocoCoverage/html')
+    }
+}
+
+def coverageGate = tasks.register('jacocoCoverageGate', JacocoCoverageVerification) {
+    group = 'verification'
+    description = 'Fails the build when the line coverage of the whole project is below 90%.'
+    coverageInputs(it)
+    dependsOn coverageReport
+    violationRules {
+        rule {
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = 0.90
+            }
+        }
+    }
+}
+
+tasks.named('check') { dependsOn coverageGate }
+tasks.named('build') { dependsOn coverageGate }
