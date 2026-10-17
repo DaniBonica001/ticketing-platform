@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+import reactor.test.scheduler.VirtualTimeScheduler;
 import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.services.sqs.SqsAsyncClient;
 import software.amazon.awssdk.services.sqs.model.DeleteMessageRequest;
@@ -16,7 +17,10 @@ import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageResponse;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
@@ -72,6 +76,8 @@ class SQSListenerTest {
         verify(client, times(1)).deleteMessage(captor.capture());
         assertThat(captor.getValue().receiptHandle()).isEqualTo("receipt-ok");
         assertThat(captor.getValue().queueUrl()).isEqualTo(QUEUE);
+        assertThat(captor.getValue().overrideConfiguration())
+                .as("delete keeps the tight client-level timeouts").isEmpty();
     }
 
     @Test
@@ -88,6 +94,25 @@ class SQSListenerTest {
         assertThat(request.visibilityTimeout()).isNull();
         assertThat(request.messageAttributeNames()).contains("All");
         assertThat(request.messageSystemAttributeNames()).contains(MessageSystemAttributeName.APPROXIMATE_RECEIVE_COUNT);
+    }
+
+    @Test
+    void receiveTimeoutOutlivesTheLongPoll() {
+        // Arrange
+        receive();
+
+        // Act
+        StepVerifier.create(listener(message -> Mono.just(MessageDisposition.DELETE)).receiveAndProcess()).verifyComplete();
+
+        // Assert: the 20 s long poll plus the margin, so an empty poll is never cut by the client timeout
+        ArgumentCaptor<ReceiveMessageRequest> captor = ArgumentCaptor.forClass(ReceiveMessageRequest.class);
+        verify(client).receiveMessage(captor.capture());
+        Duration expected = Duration.ofSeconds(20).plus(SQSListener.RECEIVE_TIMEOUT_MARGIN);
+        assertThat(expected).isEqualTo(Duration.ofSeconds(25));
+        assertThat(captor.getValue().overrideConfiguration()).hasValueSatisfying(override -> {
+            assertThat(override.apiCallTimeout()).contains(expected);
+            assertThat(override.apiCallAttemptTimeout()).contains(expected);
+        });
     }
 
     @Test
@@ -156,6 +181,37 @@ class SQSListenerTest {
         assertThat(listener.isRunning()).isFalse();
         int afterStop = receives.get();
         verify(client, after(100).atMost(afterStop + 1)).receiveMessage(any(ReceiveMessageRequest.class));
+    }
+
+    @Test
+    void backoffResetsAfterASuccessfulReceive() {
+        // Arrange: 4 failures grow the backoff, one success, then an isolated failure
+        SQSListener.ListenerSettings slowBackoff = new SQSListener.ListenerSettings(QUEUE, 20, 10, 0, 1, 10,
+                Duration.ofSeconds(1), Duration.ofSeconds(30));
+        List<Long> receivedAt = new CopyOnWriteArrayList<>();
+        when(client.receiveMessage(any(ReceiveMessageRequest.class))).thenAnswer(invocation -> {
+            receivedAt.add(VirtualTimeScheduler.get().now(TimeUnit.MILLISECONDS));
+            int call = receivedAt.size();
+            if (call == 5) {
+                return CompletableFuture.completedFuture(ReceiveMessageResponse.builder().build());
+            }
+            return call <= 6
+                    ? CompletableFuture.failedFuture(SdkClientException.create("blip"))
+                    : new CompletableFuture<ReceiveMessageResponse>();
+        });
+
+        // Act
+        StepVerifier.withVirtualTime(() -> new SQSListener(client, slowBackoff, message -> Mono.empty()).poll())
+                .thenAwait(Duration.ofMinutes(2))
+                .thenCancel()
+                .verify();
+
+        // Assert: the failure after the success waits the minimum backoff again (1 s + up to 50 % jitter)
+        assertThat(receivedAt).hasSize(7);
+        assertThat(receivedAt.get(4) - receivedAt.get(3)).as("backoff grew before the success")
+                .isGreaterThanOrEqualTo(4_000);
+        assertThat(receivedAt.get(6) - receivedAt.get(5)).as("backoff after the success")
+                .isBetween(1_000L, 1_500L);
     }
 
     @Test

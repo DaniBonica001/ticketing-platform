@@ -13,6 +13,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
+import software.amazon.awssdk.awscore.retry.AwsRetryStrategy;
 import software.amazon.awssdk.metrics.MetricPublisher;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.sqs.SqsAsyncClient;
@@ -28,12 +29,20 @@ public class SQSConfig {
     private static final Duration ERROR_BACKOFF = Duration.ofSeconds(1);
     private static final Duration MAX_ERROR_BACKOFF = Duration.ofSeconds(30);
 
+    /**
+     * SDK retries are disabled: a failed receive is retried by the poll loop with backoff, and a failed delete
+     * leaves the message to be re-delivered and handled as a duplicate (idempotent consumers). The client-level
+     * timeouts bound {@code DeleteMessage}; {@code ReceiveMessage} overrides them per request (long polling).
+     */
     @Bean
     public SqsAsyncClient sqsAsyncClient(SQSProperties properties, MetricPublisher publisher) {
         SqsAsyncClientBuilder builder = SqsAsyncClient.builder()
                 .region(Region.of(properties.region()))
                 .credentialsProvider(DefaultCredentialsProvider.builder().build())
-                .overrideConfiguration(o -> o.addMetricPublisher(publisher));
+                .overrideConfiguration(o -> o.addMetricPublisher(publisher)
+                        .retryStrategy(AwsRetryStrategy.doNotRetry())
+                        .apiCallTimeout(properties.apiCallTimeout())
+                        .apiCallAttemptTimeout(properties.apiCallAttemptTimeout()));
         if (properties.endpoint() != null && !properties.endpoint().isBlank()) {
             builder.endpointOverride(URI.create(properties.endpoint()));
         }
@@ -55,7 +64,7 @@ public class SQSConfig {
                                            ReserveOrderUseCase reserveOrderUseCase, OrderMessageValidator validator,
                                            MessageTracing tracing, BusinessMetrics metrics) {
         OrderMessageProcessor processor = new OrderMessageProcessor(MessageType.ORDER_PLACED,
-                reserveOrderUseCase::execute, validator, tracing, metrics);
+                reserveOrderUseCase::execute, validator, tracing, metrics, properties.processingTimeout());
         return new SQSListener(client, settings(properties, properties.ordersQueueUrl()), processor).start();
     }
 
@@ -65,7 +74,7 @@ public class SQSConfig {
                                                   OrderMessageValidator validator, MessageTracing tracing,
                                                   BusinessMetrics metrics) {
         OrderMessageProcessor processor = new OrderMessageProcessor(MessageType.ORDER_CONFIRMATION_REQUESTED,
-                processPaymentUseCase::execute, validator, tracing, metrics);
+                processPaymentUseCase::execute, validator, tracing, metrics, properties.processingTimeout());
         return new SQSListener(client, settings(properties, properties.confirmationsQueueUrl()), processor).start();
     }
 

@@ -76,14 +76,24 @@ class PlaceOrderUseCaseTest {
     }
 
     @Test
-    void stillAcceptsTheOrderWhenPublishingFails() {
+    void stillAcceptsTheOrderWhenThePublisherIsUnavailableAfterRetries() {
         when(events.findById(EVENT_ID)).thenReturn(Mono.just(Fixtures.event()));
         when(orders.place(any(), any())).thenAnswer(invocation -> Mono.just(new OrderWriteResult.Created(invocation.getArgument(0))));
-        when(publisher.publishOrderPlaced(any())).thenReturn(Mono.error(new IllegalStateException("sqs down")));
+        when(publisher.publishOrderPlaced(any()))
+                .thenReturn(Mono.error(new ServiceUnavailableException("SQS", new IllegalStateException("sqs down"))));
 
         StepVerifier.create(useCase.place(COMMAND))
                 .assertNext(order -> assertThat(order.status()).isEqualTo(OrderStatus.QUEUED))
                 .verifyComplete();
+    }
+
+    @Test
+    void propagatesNonTransientPublishingFailures() {
+        when(events.findById(EVENT_ID)).thenReturn(Mono.just(Fixtures.event()));
+        when(orders.place(any(), any())).thenAnswer(invocation -> Mono.just(new OrderWriteResult.Created(invocation.getArgument(0))));
+        when(publisher.publishOrderPlaced(any())).thenReturn(Mono.error(new IllegalStateException("access denied")));
+
+        StepVerifier.create(useCase.place(COMMAND)).verifyErrorMessage("access denied");
     }
 
     @Test

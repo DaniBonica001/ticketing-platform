@@ -3,6 +3,7 @@ package com.dbonilla.ticketing.api.usecase;
 import com.dbonilla.ticketing.api.model.exception.InvalidOrderStateException;
 import com.dbonilla.ticketing.api.model.exception.OrderNotFoundException;
 import com.dbonilla.ticketing.api.model.exception.ReservationExpiredException;
+import com.dbonilla.ticketing.api.model.exception.ServiceUnavailableException;
 import com.dbonilla.ticketing.api.model.order.Caller;
 import com.dbonilla.ticketing.api.model.order.ConfirmWriteResult;
 import com.dbonilla.ticketing.api.model.order.Order;
@@ -72,15 +73,26 @@ class ConfirmOrderUseCaseTest {
     }
 
     @Test
-    void stillAcceptsWhenPublishingFails() {
+    void stillAcceptsWhenThePublisherIsUnavailableAfterRetries() {
         when(orders.findById(ORDER_ID)).thenReturn(Mono.just(RESERVED));
         when(orders.confirm(any(), any(), eq(USER_ID), eq(NOW)))
                 .thenAnswer(invocation -> Mono.just(new ConfirmWriteResult.Confirmed(invocation.getArgument(0))));
-        when(publisher.publishConfirmationRequested(any())).thenReturn(Mono.error(new IllegalStateException("down")));
+        when(publisher.publishConfirmationRequested(any()))
+                .thenReturn(Mono.error(new ServiceUnavailableException("SQS", new IllegalStateException("down"))));
 
         StepVerifier.create(useCase.confirm(COMMAND))
                 .assertNext(order -> assertThat(order.status()).isEqualTo(OrderStatus.PENDING_CONFIRMATION))
                 .verifyComplete();
+    }
+
+    @Test
+    void propagatesNonTransientPublishingFailures() {
+        when(orders.findById(ORDER_ID)).thenReturn(Mono.just(RESERVED));
+        when(orders.confirm(any(), any(), eq(USER_ID), eq(NOW)))
+                .thenAnswer(invocation -> Mono.just(new ConfirmWriteResult.Confirmed(invocation.getArgument(0))));
+        when(publisher.publishConfirmationRequested(any())).thenReturn(Mono.error(new IllegalStateException("denied")));
+
+        StepVerifier.create(useCase.confirm(COMMAND)).verifyErrorMessage("denied");
     }
 
     @Test

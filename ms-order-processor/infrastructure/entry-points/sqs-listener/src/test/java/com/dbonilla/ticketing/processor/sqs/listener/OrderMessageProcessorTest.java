@@ -19,10 +19,13 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class OrderMessageProcessorTest {
 
@@ -30,11 +33,16 @@ class OrderMessageProcessorTest {
     private final AtomicReference<OrderCommand> received = new AtomicReference<>();
 
     private OrderMessageProcessor processor(MessageType type, Function<OrderCommand, Mono<ProcessingOutcome>> useCase) {
+        return processor(type, useCase, Duration.ofSeconds(25));
+    }
+
+    private OrderMessageProcessor processor(MessageType type, Function<OrderCommand, Mono<ProcessingOutcome>> useCase,
+                                            Duration deadline) {
         return new OrderMessageProcessor(type, command -> {
             received.set(command);
             return useCase.apply(command);
         }, new OrderMessageValidator(JsonMapper.builder().build()),
-                new MessageTracing(ObservationRegistry.NOOP), new BusinessMetrics(registry));
+                new MessageTracing(ObservationRegistry.NOOP), new BusinessMetrics(registry), deadline);
     }
 
     private double processed(String outcome) {
@@ -93,6 +101,31 @@ class OrderMessageProcessorTest {
         assertRetained(new OrderNotFoundException("o"), "ORDER_NOT_FOUND");
         assertRetained(new InventoryConditionFailedException("e"), "INVENTORY_INCONSISTENT");
         assertRetained(new IllegalStateException("bug"), "UNEXPECTED_ERROR");
+    }
+
+    @Test
+    void keepsMessageWhenProcessingExceedsTheDeadline() {
+        // Arrange: a use case that never completes
+        AtomicBoolean cancelled = new AtomicBoolean();
+        OrderMessageProcessor processor = processor(MessageType.ORDER_PLACED,
+                command -> Mono.<ProcessingOutcome>never().doOnCancel(() -> cancelled.set(true)),
+                Duration.ofMillis(50));
+
+        // Act & Assert
+        StepVerifier.create(processor.apply(TestMessages.message(TestMessages.body("OrderPlaced"))))
+                .expectNext(MessageDisposition.RETAIN)
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
+        assertThat(processed("PROCESSING_TIMEOUT")).isEqualTo(1);
+        assertThat(cancelled).as("in-flight work is cancelled at the deadline").isTrue();
+    }
+
+    @Test
+    void rejectsNonPositiveDeadlines() {
+        assertThatThrownBy(() -> processor(MessageType.ORDER_PLACED, command -> Mono.empty(), Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> processor(MessageType.ORDER_PLACED, command -> Mono.empty(), null))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     private void assertRetained(Throwable error, String outcome) {

@@ -35,14 +35,14 @@ final class OrderTransactions {
 
     static final String NEW_ORDER_CONDITION = "attribute_not_exists(orderId)";
     static final String COMPLIMENTARY_UPDATE =
-            "SET available = available - :q, complimentary = complimentary + :q";
+            "SET available = available - :q, complimentary = complimentary + :q, updatedAt = :ts";
     static final String AVAILABLE_CONDITION = "available >= :q";
     static final String CONFIRM_ORDER_UPDATE = "SET #status = :pendingConfirmation, paymentReference = :ref, "
             + "deadlineAt = :deadline, updatedAt = :ts";
     static final String CONFIRM_ORDER_CONDITION =
             "#status = :reserved AND deadlineAt > :now AND userId = :caller";
     static final String CONFIRM_EVENT_UPDATE =
-            "SET reserved = reserved - :q, pendingConfirmation = pendingConfirmation + :q";
+            "SET reserved = reserved - :q, pendingConfirmation = pendingConfirmation + :q, updatedAt = :ts";
     static final String RESERVED_CONDITION = "reserved >= :q";
 
     private final DynamoTablesProperties tables;
@@ -56,14 +56,14 @@ final class OrderTransactions {
         return request(newOrder(order), audit(transition, traceId));
     }
 
-    /** T8: Update event available to complimentary [available >= :q] + Put order + Put audit. */
+    /** T8: Update event available to complimentary (and updatedAt) [available >= :q] + Put order + Put audit. */
     TransactWriteItemsRequest complimentary(Order order, OrderTransition transition, Optional<String> traceId) {
         Update event = Update.builder()
                 .tableName(tables.eventsTable())
                 .key(EventItemMapper.key(order.eventId()))
                 .updateExpression(COMPLIMENTARY_UPDATE)
                 .conditionExpression(AVAILABLE_CONDITION)
-                .expressionAttributeValues(Map.of(":q", n(order.quantity())))
+                .expressionAttributeValues(Map.of(":q", n(order.quantity()), ":ts", timestamp(order.updatedAt())))
                 .build();
         return request(TransactWriteItem.builder().update(event).build(), newOrder(order), audit(transition, traceId));
     }
@@ -95,7 +95,7 @@ final class OrderTransactions {
                 .key(EventItemMapper.key(next.eventId()))
                 .updateExpression(CONFIRM_EVENT_UPDATE)
                 .conditionExpression(RESERVED_CONDITION)
-                .expressionAttributeValues(Map.of(":q", n(next.quantity())))
+                .expressionAttributeValues(Map.of(":q", n(next.quantity()), ":ts", timestamp(next.updatedAt())))
                 .build();
         return request(TransactWriteItem.builder().update(order).build(),
                 TransactWriteItem.builder().update(event).build(), audit(transition, traceId));

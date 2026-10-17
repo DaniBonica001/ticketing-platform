@@ -43,8 +43,12 @@ public class ReserveOrderUseCase {
                 .onErrorResume(OrderStateConflictException.class, duplicate -> Mono.just(ProcessingOutcome.ALREADY_PROCESSED));
     }
 
+    /**
+     * T3. A conflict here is the benign race of a duplicate delivery that already moved the order out of QUEUED.
+     */
     private Mono<ProcessingOutcome> rejectSoldOut(Order order, String traceId) {
         return transitions.apply(order::rejectSoldOut, traceId)
-                .thenReturn(ProcessingOutcome.REJECTED_SOLD_OUT);
+                .thenReturn(ProcessingOutcome.REJECTED_SOLD_OUT)
+                .onErrorResume(OrderStateConflictException.class, duplicate -> Mono.just(ProcessingOutcome.ALREADY_PROCESSED));
     }
 }

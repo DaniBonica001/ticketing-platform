@@ -9,10 +9,12 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.metrics.LoggingMetricPublisher;
 import software.amazon.awssdk.services.sqs.SqsAsyncClient;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -26,7 +28,7 @@ class SQSConfigTest {
 
     private static SQSProperties properties(String endpoint) {
         return new SQSProperties("us-east-1", endpoint, "http://q/orders", "http://q/confirmations",
-                20, 0, 10, 1, 10);
+                20, 0, 10, 1, 10, null, null, null);
     }
 
     @Test
@@ -38,6 +40,41 @@ class SQSConfigTest {
             assertThat(aws).isNotNull();
             assertThat(blank).isNotNull();
         }
+    }
+
+    @Test
+    void clientIsBoundedByTimeoutsAndLeavesRetriesToThePollLoop() {
+        // Arrange
+        SQSProperties properties = new SQSProperties("us-east-1", null, "http://q/orders", "http://q/confirmations",
+                20, 0, 10, 1, 10, Duration.ofSeconds(6), Duration.ofSeconds(3), null);
+
+        // Act
+        try (SqsAsyncClient client = config.sqsAsyncClient(properties, LoggingMetricPublisher.create())) {
+            ClientOverrideConfiguration override = client.serviceClientConfiguration().overrideConfiguration();
+
+            // Assert
+            assertThat(override.apiCallTimeout()).contains(Duration.ofSeconds(6));
+            assertThat(override.apiCallAttemptTimeout()).contains(Duration.ofSeconds(3));
+            assertThat(override.retryStrategy()).hasValueSatisfying(strategy ->
+                    assertThat(strategy.maxAttempts()).isEqualTo(1));
+        }
+    }
+
+    @Test
+    void timeoutsHaveSensibleDefaults() {
+        SQSProperties defaults = properties(null);
+
+        assertThat(defaults.apiCallTimeout()).isEqualTo(Duration.ofSeconds(5));
+        assertThat(defaults.apiCallAttemptTimeout()).isEqualTo(Duration.ofSeconds(2));
+    }
+
+    @Test
+    void processingDeadlineDefaultsBelowTheVisibilityTimeout() {
+        // 25 s keeps a slow message from being redelivered while it is still in flight (VisibilityTimeout 30 s)
+        assertThat(properties(null).processingTimeout()).isEqualTo(Duration.ofSeconds(25));
+        assertThat(new SQSProperties("us-east-1", null, "http://q/orders", "http://q/confirmations",
+                20, 0, 10, 1, 10, null, null, Duration.ofSeconds(10)).processingTimeout())
+                .isEqualTo(Duration.ofSeconds(10));
     }
 
     @Test
