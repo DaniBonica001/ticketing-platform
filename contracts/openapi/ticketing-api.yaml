@@ -1,0 +1,495 @@
+openapi: 3.1.0
+info:
+  title: Ticketing API
+  version: 1.0.0
+  description: |
+    Reactive API of the ticketing platform. Purchases are accepted immediately (202) and processed
+    asynchronously; clients poll `GET /orders/{orderId}` or stream availability via SSE.
+
+    Errors follow RFC 9457 (`application/problem+json`) with an extra `code` field.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: http://localhost:8090
+    description: Local (docker-compose)
+tags:
+  - name: Events
+    description: Event catalog, inventory availability and complimentary tickets
+  - name: Orders
+    description: Asynchronous purchase flow and order status
+security:
+  - bearerAuth: []
+
+paths:
+  /api/v1/events:
+    get:
+      tags: [Events]
+      operationId: listEvents
+      summary: List events (paginated)
+      security: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: cursor
+          in: query
+          description: Opaque cursor returned as `nextCursor` by the previous page.
+          schema: { type: string, maxLength: 512 }
+      responses:
+        '200':
+          description: Page of events
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+    post:
+      tags: [Events]
+      operationId: createEvent
+      summary: Create an event (admin)
+      description: Requires scope `ticketing:admin`. All tickets start as AVAILABLE.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateEventRequest' }
+      responses:
+        '201':
+          description: Event created
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /api/v1/events/{eventId}:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+    get:
+      tags: [Events]
+      operationId: getEvent
+      summary: Get an event
+      security: []
+      responses:
+        '200':
+          description: Event
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Events]
+      operationId: updateEvent
+      summary: Update event details (admin, optimistic locking)
+      description: |
+        Requires scope `ticketing:admin` and header `If-Match` with the current ETag. Capacity cannot be
+        changed (it would break the inventory invariant).
+      parameters:
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string, example: '"3"' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateEventRequest' }
+      responses:
+        '200':
+          description: Event updated
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+
+  /api/v1/events/{eventId}/availability:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+    get:
+      tags: [Events]
+      operationId: getAvailability
+      summary: Current availability (strongly consistent read)
+      security: []
+      responses:
+        '200':
+          description: Availability snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Availability' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/events/{eventId}/availability/stream:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+    get:
+      tags: [Events]
+      operationId: streamAvailability
+      summary: Real-time availability (Server-Sent Events)
+      description: |
+        Emits an `availability` event whenever the counters change (polled every 2 s), plus a heartbeat
+        comment every 15 s. The server closes the stream after 5 minutes; clients should reconnect.
+      security: []
+      responses:
+        '200':
+          description: SSE stream of Availability objects
+          content:
+            text/event-stream:
+              schema: { $ref: '#/components/schemas/Availability' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/events/{eventId}/complimentary:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+    post:
+      tags: [Events]
+      operationId: issueComplimentary
+      summary: Issue complimentary tickets (admin)
+      description: Moves tickets AVAILABLE -> COMPLIMENTARY synchronously and creates a COMPLIMENTARY order.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ComplimentaryRequest' }
+      responses:
+        '201':
+          description: Complimentary order created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/IdempotencyKeyReused' }
+
+  /api/v1/orders:
+    post:
+      tags: [Orders]
+      operationId: placeOrder
+      summary: Start a purchase (async)
+      description: |
+        Requires scope `ticketing:user`. Persists the order as QUEUED, enqueues it and returns
+        immediately. Inventory is validated asynchronously by the order processor. Retrying with the same
+        `Idempotency-Key` returns the same order.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlaceOrderRequest' }
+      responses:
+        '202':
+          description: Order accepted
+          headers:
+            Location: { schema: { type: string, example: /api/v1/orders/3f2c9a54-1b7e-5d2a-8c4f-0e6b9d1a7c33 } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/IdempotencyKeyReused' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/v1/orders/{orderId}:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    get:
+      tags: [Orders]
+      operationId: getOrder
+      summary: Get order status
+      description: Owner or admin only. Orders owned by someone else return 404.
+      responses:
+        '200':
+          description: Order
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/orders/{orderId}/confirm:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    post:
+      tags: [Orders]
+      operationId: confirmOrder
+      summary: Confirm a reserved order (submit payment)
+      description: |
+        Owner only. Allowed while the order is RESERVED and before `expiresAt`. Moves it to
+        PENDING_CONFIRMATION and enqueues payment verification. Repeating the call with the same
+        `paymentReference` is idempotent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmOrderRequest' }
+      responses:
+        '202':
+          description: Confirmation accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/v1/orders/{orderId}/history:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    get:
+      tags: [Orders]
+      operationId: getOrderHistory
+      summary: Audit trail of the order
+      description: Owner or admin only.
+      responses:
+        '200':
+          description: Transitions in chronological order
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/OrderTransition' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        RS256 JWT. Validated claims: iss=https://auth.ticketing.local, aud=ticketing-api, exp, nbf.
+        `sub` is the user id. Scopes: `ticketing:user`, `ticketing:admin`.
+
+  parameters:
+    EventId:
+      name: eventId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Client-generated UUID. Same key + same payload = same order.
+      schema: { type: string, format: uuid }
+
+  headers:
+    ETag:
+      description: Event version, quoted (e.g. "3"). Use it in If-Match to update the event.
+      schema: { type: string }
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema: { type: integer }
+
+  schemas:
+    CreateEventRequest:
+      type: object
+      additionalProperties: false
+      required: [name, eventDate, venue, capacity]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120, example: Karol G - Tropicoqueta Tour }
+        eventDate: { type: string, format: date-time, description: Must be in the future, example: '2026-12-20T20:00:00-05:00' }
+        venue: { type: string, minLength: 1, maxLength: 120, example: Estadio Atanasio Girardot }
+        capacity: { type: integer, minimum: 1, maximum: 100000, example: 5 }
+
+    UpdateEventRequest:
+      type: object
+      additionalProperties: false
+      required: [name, eventDate, venue]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        eventDate: { type: string, format: date-time }
+        venue: { type: string, minLength: 1, maxLength: 120 }
+
+    Event:
+      type: object
+      required: [eventId, name, eventDate, venue, capacity, availability, version, createdAt]
+      properties:
+        eventId: { type: string, format: uuid }
+        name: { type: string }
+        eventDate: { type: string, format: date-time }
+        venue: { type: string }
+        capacity: { type: integer }
+        availability: { $ref: '#/components/schemas/Availability' }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    EventPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Event' }
+        nextCursor: { type: [string, 'null'] }
+
+    Availability:
+      type: object
+      description: Ticket counters. Their sum always equals capacity.
+      required: [eventId, capacity, available, reserved, pendingConfirmation, sold, complimentary]
+      properties:
+        eventId: { type: string, format: uuid }
+        capacity: { type: integer, example: 5 }
+        available: { type: integer, example: 3 }
+        reserved: { type: integer, example: 0 }
+        pendingConfirmation: { type: integer, example: 0 }
+        sold: { type: integer, example: 2 }
+        complimentary: { type: integer, example: 0 }
+        asOf: { type: string, format: date-time }
+
+    PlaceOrderRequest:
+      type: object
+      additionalProperties: false
+      required: [eventId, quantity]
+      properties:
+        eventId: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1, maximum: 10, example: 2 }
+
+    ConfirmOrderRequest:
+      type: object
+      additionalProperties: false
+      required: [paymentReference]
+      properties:
+        paymentReference:
+          type: string
+          pattern: '^[A-Za-z0-9-]{4,64}$'
+          description: Reference returned by the payment provider. In the local simulation, references starting with "DECLINED-" are rejected.
+          example: PAY-123
+
+    ComplimentaryRequest:
+      type: object
+      additionalProperties: false
+      required: [quantity, recipientUserId]
+      properties:
+        quantity: { type: integer, minimum: 1, maximum: 10 }
+        recipientUserId: { type: string, minLength: 1, maxLength: 128 }
+
+    OrderStatus:
+      type: string
+      enum: [QUEUED, RESERVED, PENDING_CONFIRMATION, SOLD, COMPLIMENTARY, REJECTED, EXPIRED]
+
+    Order:
+      type: object
+      required: [orderId, eventId, quantity, status, createdAt]
+      properties:
+        orderId: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        quantity: { type: integer }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        reason:
+          type: [string, 'null']
+          enum: [SOLD_OUT, PAYMENT_DECLINED, null]
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+          description: Present only while the order is RESERVED.
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    OrderTransition:
+      type: object
+      required: [toStatus, actor, occurredAt]
+      properties:
+        fromStatus: { oneOf: [{ $ref: '#/components/schemas/OrderStatus' }, { type: 'null' }] }
+        toStatus: { $ref: '#/components/schemas/OrderStatus' }
+        reason: { type: [string, 'null'] }
+        actor: { type: string, enum: [ticketing-api, order-processor, reservation-expirer] }
+        occurredAt: { type: string, format: date-time }
+
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details.
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, EVENT_NOT_FOUND, ORDER_NOT_FOUND,
+                 INVALID_ORDER_STATE, RESERVATION_EXPIRED, INSUFFICIENT_INVENTORY, VERSION_CONFLICT,
+                 PAYLOAD_TOO_LARGE, IDEMPOTENCY_KEY_REUSED, PRECONDITION_REQUIRED, RATE_LIMITED,
+                 SERVICE_UNAVAILABLE, INTERNAL_ERROR]
+        detail: { type: string }
+        instance: { type: string }
+        traceId: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
+
+  responses:
+    BadRequest:
+      description: Validation error
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Unauthorized:
+      description: Missing or invalid token
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Forbidden:
+      description: Insufficient scope
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    NotFound:
+      description: Resource not found (or not owned by the caller)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Conflict:
+      description: INVALID_ORDER_STATE, RESERVATION_EXPIRED or INSUFFICIENT_INVENTORY
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    PreconditionFailed:
+      description: VERSION_CONFLICT
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    PreconditionRequired:
+      description: If-Match header missing
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    PayloadTooLarge:
+      description: Body larger than 16 KB
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    IdempotencyKeyReused:
+      description: Same Idempotency-Key with a different payload
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    TooManyRequests:
+      description: Rate limit exceeded
+      headers:
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    ServiceUnavailable:
+      description: Dependency unavailable after retries
+      headers:
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
