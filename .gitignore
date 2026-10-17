@@ -1,0 +1,24 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Kiro
+.kiro/
+
+# Gradle / Java
+.gradle/
+build/
+build-cache/
+out/
+*.class
+*.log
+
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# LocalStack volume
+.localstack/
