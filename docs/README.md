@@ -6,6 +6,7 @@
 | [Modelo de dominio](design/domain-model.md) | Estados de la entrada y de la orden, transiciones e invariantes |
 | [Diseño de DynamoDB](design/dynamodb.md) | Tablas, GSI y transacciones exactas |
 | [Errores y reintentos](design/error-handling-and-retries.md) | Matriz de reintentos, abuso y catálogo de errores HTTP |
+| [Diagrama de arquitectura](diagrams/architecture.png) | AWS con zonas de red y controles de seguridad ([fuente Excalidraw](diagrams/architecture.excalidraw)) |
 | [Diagramas de secuencia](diagrams/sequence-diagrams.md) | 8 flujos en Mermaid |
 | [OpenAPI](../contracts/openapi/ticketing-api.yaml) | Contrato REST de `ms-ticketing-api` |
 | [Mensajes SQS](../contracts/messages/order-message.schema.json) | JSON Schema de los mensajes |
